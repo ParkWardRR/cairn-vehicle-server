@@ -63,6 +63,19 @@ type Options struct {
 	OBDSamples     int
 	JournalEntries int
 
+	// GapAfter writes a GNSS_GAP record after this many GNSS samples, and
+	// jumps the following samples a long way off, as a tunnel would.
+	//
+	// Zero means no gap.
+	GapAfter int
+
+	// FixlessFrom makes every GNSS sample from this index onwards report no
+	// fix, as a receiver losing the sky would. The samples are still written:
+	// the absence is data.
+	//
+	// Zero means every sample has a fix.
+	FixlessFrom int
+
 	// Mutate runs after the manifest is built but before it is signed, so a
 	// test can produce a validly signed manifest that is nevertheless wrong.
 	Mutate func(*format.Manifest)
@@ -85,8 +98,35 @@ func Build(opts Options) (*Bundle, error) {
 	// Capture chain: segment 1 continues segment 0's sequence and CRC chain.
 	w0 := format.NewSegmentWriter(segHeader(deviceID, 0), format.ScanState{})
 	for i := 0; i < opts.GNSSSamples; i++ {
-		if err := w0.Append(format.RecordGNSSSample, 1, 0, uint32(i*1000), GNSSPayload(i)); err != nil {
+		// A receiver that has lost the sky still produces samples; they simply
+		// carry no position. Recording them is how the gap stays visible.
+		if opts.FixlessFrom > 0 && i >= opts.FixlessFrom {
+			if err := w0.Append(format.RecordGNSSSample, 1, 0,
+				uint32(i*1000), FixlessGNSSPayload()); err != nil {
+				return nil, fmt.Errorf("append fix-less GNSS %d: %w", i, err)
+			}
+			continue
+		}
+
+		// After a gap the vehicle reappears somewhere else entirely, which is
+		// exactly the case a decoder must not bridge with a straight line.
+		offset := i
+		if opts.GapAfter > 0 && i >= opts.GapAfter {
+			offset = i + 5000
+		}
+
+		if err := w0.Append(format.RecordGNSSSample, 1, 0,
+			uint32(i*1000), GNSSPayload(offset)); err != nil {
 			return nil, fmt.Errorf("append GNSS %d: %w", i, err)
+		}
+
+		// The gap record goes between the last pre-gap sample and the first
+		// post-gap one.
+		if opts.GapAfter > 0 && i == opts.GapAfter-1 {
+			if err := w0.Append(format.RecordGNSSGap, 1, 0,
+				uint32(i*1000), GapPayload(42_000, 42, 4)); err != nil {
+				return nil, fmt.Errorf("append gap: %w", err)
+			}
 		}
 	}
 	seg0 := append([]byte(nil), w0.Bytes()...)
@@ -153,9 +193,13 @@ func Build(opts Options) (*Bundle, error) {
 		return nil, err
 	}
 
-	var bundleID, bootID [16]byte
-	for i := range bundleID {
-		bundleID[i] = byte(i)
+	// A real device assigns a fresh ULID per bundle. Deriving the synthetic one
+	// from the content root gives distinct bundles distinct IDs, so a test that
+	// builds two different bundles does not reuse one identifier for both.
+	bundleID := syntheticBundleID(root)
+
+	var bootID [16]byte
+	for i := range bootID {
 		bootID[i] = byte(0xA0 + i)
 	}
 
@@ -174,17 +218,13 @@ func Build(opts Options) (*Bundle, error) {
 		UTCBasisAccMS:             250,
 		FirstSeq:                  0,
 		LastSeq:                   uint32(max(totalRecords-1, 0)),
-		RecordCounts: map[format.RecordType]uint32{
-			format.RecordGNSSSample:      uint32(opts.GNSSSamples),
-			format.RecordOBDSnapshot:     uint32(opts.OBDSamples),
-			format.RecordStateTransition: uint32(opts.JournalEntries),
-		},
-		Members:            members,
-		ChunkDescriptors:   descriptors,
-		ContentRoot:        root,
-		PolicyVersion:      1,
-		RecoveryState:      format.RecoveryClean,
-		SignatureAlgorithm: format.SignatureAlgorithmEd25519,
+		RecordCounts:              recordCounts(&opts),
+		Members:                   members,
+		ChunkDescriptors:          descriptors,
+		ContentRoot:               root,
+		PolicyVersion:             1,
+		RecoveryState:             format.RecoveryClean,
+		SignatureAlgorithm:        format.SignatureAlgorithmEd25519,
 	}
 
 	if opts.Mutate != nil {
@@ -205,6 +245,33 @@ func Build(opts Options) (*Bundle, error) {
 	}, nil
 }
 
+// syntheticBundleID derives a stable, content-distinct bundle ID.
+//
+// Deterministic, so a rebuilt bundle keeps its identity; distinct, so two
+// bundles with different content never share one.
+func syntheticBundleID(contentRoot [32]byte) [16]byte {
+	h := sha256.New()
+	h.Write([]byte("cairn-testbundle-id"))
+	h.Write(contentRoot[:])
+
+	var id [16]byte
+	copy(id[:], h.Sum(nil)[:16])
+	return id
+}
+
+// recordCounts tallies what was actually written, including any gap record.
+func recordCounts(opts *Options) map[format.RecordType]uint32 {
+	counts := map[format.RecordType]uint32{
+		format.RecordGNSSSample:      uint32(opts.GNSSSamples),
+		format.RecordOBDSnapshot:     uint32(opts.OBDSamples),
+		format.RecordStateTransition: uint32(opts.JournalEntries),
+	}
+	if opts.GapAfter > 0 {
+		counts[format.RecordGNSSGap] = 1
+	}
+	return counts
+}
+
 func segHeader(deviceID [16]byte, idx uint32) format.SegmentHeader {
 	var boot [16]byte
 	for i := range boot {
@@ -221,8 +288,8 @@ func segHeader(deviceID [16]byte, idx uint32) format.SegmentHeader {
 // GNSSPayload builds a 32-byte GNSS sample with a 3D fix, per spec §4.1.
 func GNSSPayload(i int) []byte {
 	p := make([]byte, 32)
-	binary.LittleEndian.PutUint32(p[0:], uint32(int32(34_000_000+i*100)))
-	binary.LittleEndian.PutUint32(p[4:], uint32(int32(-118_500_000+i*100)))
+	binary.LittleEndian.PutUint32(p[0:], uint32(int32(340_000_000+i*100)))
+	binary.LittleEndian.PutUint32(p[4:], uint32(int32(-1_185_000_000+i*100)))
 	binary.LittleEndian.PutUint32(p[8:], 5000)
 	binary.LittleEndian.PutUint16(p[12:], 1200)
 	binary.LittleEndian.PutUint16(p[14:], 9000)
@@ -252,5 +319,33 @@ func OBDPayload() []byte {
 	binary.LittleEndian.PutUint32(p[12:], 0x0F)               // requested
 	binary.LittleEndian.PutUint32(p[16:], 0x0F)               // answered
 	binary.LittleEndian.PutUint16(p[20:], 1000)               // actual cadence
+	return p
+}
+
+// FixlessGNSSPayload builds a GNSS sample reporting no fix.
+//
+// Coordinates are zero and every accuracy field is the unknown sentinel, per
+// the specification: a consumer must check fix_type rather than inferring
+// validity from the coordinates, and must never invent a precision the receiver
+// did not claim.
+func FixlessGNSSPayload() []byte {
+	p := make([]byte, 32)
+	binary.LittleEndian.PutUint16(p[16:], 0xFFFF) // HDOP unknown
+	binary.LittleEndian.PutUint16(p[18:], 0xFFFF) // horizontal accuracy unknown
+	binary.LittleEndian.PutUint16(p[20:], 0xFFFF) // vertical accuracy unknown
+	p[22] = 0                                     // no fix
+	binary.LittleEndian.PutUint16(p[30:], 0xFFFF) // UTC uncertainty unknown
+	return p
+}
+
+// GapPayload builds a 12-byte GNSS_GAP record (spec §4.8).
+//
+// A recorded absence. A decoder renders this as a discontinuity and must never
+// join a route across it.
+func GapPayload(durationMS uint32, expectedSamples uint16, cause uint8) []byte {
+	p := make([]byte, 12)
+	binary.LittleEndian.PutUint32(p[0:], durationMS)
+	binary.LittleEndian.PutUint16(p[4:], expectedSamples)
+	p[6] = cause
 	return p
 }

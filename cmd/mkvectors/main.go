@@ -206,7 +206,7 @@ func gnssPayload(latE7, lonE7 int32) []byte {
 func buildSegment(segmentIndex uint32, state format.ScanState, n int) (*format.SegmentWriter, error) {
 	w := format.NewSegmentWriter(testHeader(segmentIndex), state)
 	for i := 0; i < n; i++ {
-		p := gnssPayload(int32(34_000_000+i*100), int32(-118_500_000+i*100))
+		p := gnssPayload(int32(340_000_000+i*100), int32(-1_185_000_000+i*100))
 		if err := w.Append(format.RecordGNSSSample, 1, 0, uint32(i*1000), p); err != nil {
 			return nil, err
 		}
@@ -427,7 +427,7 @@ func vectorChainBreakSpliced(dir string, _, _ ed25519.PrivateKey) error {
 
 func vectorSeqGap(dir string, _, _ ed25519.PrivateKey) error {
 	w := format.NewSegmentWriter(testHeader(0), format.ScanState{})
-	if err := w.Append(format.RecordGNSSSample, 1, 0, 0, gnssPayload(34_000_000, -118_500_000)); err != nil {
+	if err := w.Append(format.RecordGNSSSample, 1, 0, 0, gnssPayload(340_000_000, -1_185_000_000)); err != nil {
 		return err
 	}
 	b := append([]byte(nil), w.Bytes()...)
@@ -438,7 +438,7 @@ func vectorSeqGap(dir string, _, _ ed25519.PrivateKey) error {
 		Seq:           5, // skips 1
 		MonotonicMS:   1000,
 		PrevCRC32:     w.NextState().ExpectedPrev,
-		Payload:       gnssPayload(34_000_100, -118_499_900),
+		Payload:       gnssPayload(340_000_100, -1_184_999_900),
 	}
 	b, _, err := format.AppendFrame(b, &f)
 	if err != nil {
@@ -484,13 +484,13 @@ func vectorBadHeaderCRC(dir string, _, _ ed25519.PrivateKey) error {
 
 func vectorUnknownRecordType(dir string, _, _ ed25519.PrivateKey) error {
 	w := format.NewSegmentWriter(testHeader(0), format.ScanState{})
-	if err := w.Append(format.RecordGNSSSample, 1, 0, 0, gnssPayload(34_000_000, -118_500_000)); err != nil {
+	if err := w.Append(format.RecordGNSSSample, 1, 0, 0, gnssPayload(340_000_000, -1_185_000_000)); err != nil {
 		return err
 	}
 	if err := w.Append(format.RecordType(0x7F), 1, 0, 1000, []byte("record from the future")); err != nil {
 		return err
 	}
-	if err := w.Append(format.RecordGNSSSample, 1, 0, 2000, gnssPayload(34_000_100, -118_499_900)); err != nil {
+	if err := w.Append(format.RecordGNSSSample, 1, 0, 2000, gnssPayload(340_000_100, -1_184_999_900)); err != nil {
 		return err
 	}
 
@@ -511,14 +511,14 @@ func vectorClockJump(dir string, _, _ ed25519.PrivateKey) error {
 	w := format.NewSegmentWriter(testHeader(0), format.ScanState{})
 
 	var ahead int32 = 5_000
-	forward := gnssPayload(34_000_000, -118_500_000)
+	forward := gnssPayload(340_000_000, -1_185_000_000)
 	binary.LittleEndian.PutUint32(forward[26:], uint32(ahead))
 	if err := w.Append(format.RecordGNSSSample, 1, 0, 0, forward); err != nil {
 		return err
 	}
 
 	var behind int32 = -25_000
-	backward := gnssPayload(34_000_100, -118_499_900)
+	backward := gnssPayload(340_000_100, -1_184_999_900)
 	binary.LittleEndian.PutUint32(backward[26:], uint32(behind))
 	binary.LittleEndian.PutUint16(backward[30:], 0xFFFF)
 	if err := w.Append(format.RecordGNSSSample, 1, format.FlagEstimatedUTC, 1000, backward); err != nil {
@@ -545,13 +545,13 @@ func vectorGNSSGap(dir string, _, _ ed25519.PrivateKey) error {
 	gap[6] = 4 // tunnel / obstruction
 
 	w := format.NewSegmentWriter(testHeader(0), format.ScanState{})
-	if err := w.Append(format.RecordGNSSSample, 1, 0, 0, gnssPayload(34_000_000, -118_500_000)); err != nil {
+	if err := w.Append(format.RecordGNSSSample, 1, 0, 0, gnssPayload(340_000_000, -1_185_000_000)); err != nil {
 		return err
 	}
 	if err := w.Append(format.RecordGNSSGap, 1, 0, 1000, gap); err != nil {
 		return err
 	}
-	if err := w.Append(format.RecordGNSSSample, 1, 0, 43_000, gnssPayload(34_010_000, -118_490_000)); err != nil {
+	if err := w.Append(format.RecordGNSSSample, 1, 0, 43_000, gnssPayload(340_100_000, -1_184_900_000)); err != nil {
 		return err
 	}
 
