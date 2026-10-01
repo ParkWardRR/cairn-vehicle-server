@@ -233,6 +233,11 @@ type bundleResult struct {
 	CaptureSegments []segmentResult `json:"capture_segments,omitempty"`
 	JournalSegment  *segmentResult  `json:"journal_segment,omitempty"`
 
+	// Policy is the thresholds this bundle was captured under, read from its
+	// own POLICY_SNAPSHOT. Recorded in the bundle precisely so a trip stays
+	// explainable after the thresholds change.
+	Policy *format.PolicySnapshot `json:"policy,omitempty"`
+
 	// HealthStates is every degraded condition the device reported during this
 	// bundle, unioned. Surfaced because it is the device's own account of what
 	// was wrong, and it explains gaps in the data that would otherwise look
@@ -294,6 +299,7 @@ func verifyBundle(b discoveredBundle, opts options) bundleResult {
 		for rt, n := range sr.RecordCounts {
 			scannedCounts[rt] += n
 		}
+		collectPolicy(&res, sr)
 		scannedFrames += len(sr.Frames)
 		totalDiscarded += sr.DiscardedTailBytes
 
@@ -545,6 +551,26 @@ func checkReceipt(res *bundleResult, m *format.Manifest, opts options) {
 	res.pass("receipt verifies and acknowledges this content root")
 }
 
+// collectPolicy reads the bundle's own account of the thresholds it was
+// captured under. Without it, interpreting an old bundle would mean finding the
+// firmware build that defined its policy version.
+func collectPolicy(res *bundleResult, sr *format.ScanResult) {
+	for i := range sr.Frames {
+		f := &sr.Frames[i]
+		if f.RecordType != format.RecordPolicySnapshot {
+			continue
+		}
+
+		p, err := format.ParsePolicySnapshot(f.Payload)
+		if err != nil {
+			res.fail("the POLICY_SNAPSHOT at seq %d does not parse: %v", f.Seq, err)
+			return
+		}
+		res.Policy = p
+		return
+	}
+}
+
 // collectHealth unions the degraded conditions the device reported.
 //
 // This is the device's own account of what was wrong, and it is worth reading
@@ -679,6 +705,27 @@ func report(results []bundleResult, opts options) {
 			if opts.verbose {
 				printCounts(s.RecordCounts)
 			}
+		}
+
+		if r.Policy != nil {
+			p := r.Policy
+			adaptive := "fixed rates"
+			if p.AdaptiveSampling {
+				adaptive = "adaptive rates"
+			}
+			fmt.Printf("  policy       v%d, %s: gnss %dms imu %dms obd %dms, "+
+				"start %d.%02d/%dms stop %d.%02d/%dms\n",
+				p.PolicyVersion, adaptive, p.GNSSPeriodMS, p.IMUWindowMS,
+				p.OBDPeriodMS,
+				p.StartScoreThresholdE2/100, p.StartScoreThresholdE2%100,
+				p.StartDwellMS,
+				p.StopScoreThresholdE2/100, p.StopScoreThresholdE2%100,
+				p.StopDwellMS)
+		} else if r.Sealed {
+			// Worth saying out loud: a sealed bundle with no snapshot cannot be
+			// interpreted without knowing which firmware wrote it.
+			fmt.Printf("  policy       not recorded — this bundle does not " +
+				"describe its own thresholds\n")
 		}
 
 		if r.HealthRecords > 0 {
