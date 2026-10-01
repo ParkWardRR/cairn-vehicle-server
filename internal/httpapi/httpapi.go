@@ -51,6 +51,11 @@ type Server struct {
 	// requireClientCert makes the handlers insist that the mTLS client
 	// certificate identify the same device the manifest claims.
 	requireClientCert bool
+
+	// firmwareDir holds signed update descriptors and images. Empty disables
+	// the firmware endpoints entirely rather than serving 404s, so a deployment
+	// that does not do OTA presents no such surface.
+	firmwareDir string
 }
 
 // Config configures a Server.
@@ -67,6 +72,9 @@ type Config struct {
 	// claimed identity; without it, a valid signature from any enrolled device
 	// would be accepted over any connection.
 	RequireClientCert bool
+
+	// FirmwareDir enables the OTA endpoints. Empty leaves them unregistered.
+	FirmwareDir string
 }
 
 // New creates a Server.
@@ -83,6 +91,7 @@ func New(cfg Config) *Server {
 		limiter:           cfg.Limiter,
 		log:               log,
 		requireClientCert: cfg.RequireClientCert,
+		firmwareDir:       cfg.FirmwareDir,
 	}
 }
 
@@ -92,6 +101,13 @@ func (s *Server) Routes() http.Handler {
 
 	mux.HandleFunc("GET /api/v2/health", s.handleHealth)
 	mux.HandleFunc("GET /api/v2/server/receipt-key", s.handleReceiptKey)
+
+	// Firmware. Served only when a directory was configured, so a deployment
+	// that does not do OTA has no such surface at all.
+	if s.firmwareDir != "" {
+		mux.HandleFunc("GET /api/v2/firmware/latest", s.handleFirmwareLatest)
+		mux.HandleFunc("GET /api/v2/firmware/{digest}/image", s.handleFirmwareImage)
+	}
 
 	mux.HandleFunc("POST /api/v2/bundles/offer", s.handleOffer)
 	mux.HandleFunc("PUT /api/v2/bundles/{bundleID}/chunks/{digest}", s.handleChunk)

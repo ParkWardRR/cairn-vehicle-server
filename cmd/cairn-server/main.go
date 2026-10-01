@@ -46,6 +46,10 @@ func main() {
 
 		receiptKey = flag.String("receipt-key", "", "Ed25519 seed file for signing receipts (created if absent)")
 
+		firmwareDir = flag.String("firmware-dir", "",
+			"directory of signed update descriptors and images; empty disables "+
+				"the OTA endpoints entirely")
+
 		dev = flag.Bool("dev", false,
 			"development mode: permit plaintext HTTP and an ephemeral receipt key. Never use in production.")
 
@@ -77,6 +81,7 @@ func main() {
 		revoke:          *revoke,
 		revokeWhy:       *revokeWhy,
 		list:            *list,
+		firmwareDir:     *firmwareDir,
 		printReceiptKey: *printReceiptKey,
 		log:             log,
 	}); err != nil {
@@ -94,12 +99,13 @@ type runConfig struct {
 	receiptKey   string
 	dev          bool
 
-	enroll     string
-	enrollKey  string
-	enrollName string
-	revoke     string
-	revokeWhy  string
-	list       bool
+	enroll      string
+	enrollKey   string
+	enrollName  string
+	revoke      string
+	revokeWhy   string
+	list        bool
+	firmwareDir string
 
 	printReceiptKey bool
 
@@ -205,6 +211,7 @@ func run(cfg runConfig) error {
 		Outbox:            queue,
 		Limiter:           limiter,
 		Log:               cfg.log,
+		FirmwareDir:       cfg.firmwareDir,
 		RequireClientCert: requireClientCert,
 	})
 
