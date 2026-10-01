@@ -3,6 +3,7 @@ package format
 import (
 	"encoding/binary"
 	"fmt"
+	"strings"
 )
 
 // Typed payload decoders for the record schemas in docs/bundle-format-v2.md
@@ -234,6 +235,70 @@ type DeviceHealth struct {
 	ExtSensor2    uint16
 	HealthState   uint8
 	RebootCount   uint8
+}
+
+// Degraded-state bits in DeviceHealth.HealthState (§4.10).
+//
+// A bitmap rather than a severity because degradation is not ordered: a low
+// battery, a missing fix and a full card are different problems with different
+// fixes, and a scalar would force a priority between them and discard the rest.
+const (
+	HealthDegradedGNSS     uint8 = 0x01
+	HealthDegradedStorage  uint8 = 0x02
+	HealthDegradedTime     uint8 = 0x04
+	HealthDegradedNetwork  uint8 = 0x08
+	HealthLowPower         uint8 = 0x10
+	HealthRecoveryRequired uint8 = 0x20
+	HealthDegradedSensing  uint8 = 0x40
+	// 0x80 is reserved.
+)
+
+var healthBitNames = []struct {
+	bit  uint8
+	name string
+}{
+	{HealthDegradedGNSS, "DEGRADED_GNSS"},
+	{HealthDegradedStorage, "DEGRADED_STORAGE"},
+	{HealthDegradedTime, "DEGRADED_TIME"},
+	{HealthDegradedNetwork, "DEGRADED_NETWORK"},
+	{HealthLowPower, "LOW_POWER"},
+	{HealthRecoveryRequired, "RECOVERY_REQUIRED"},
+	{HealthDegradedSensing, "DEGRADED_SENSING"},
+}
+
+// HealthStateNames renders a degraded-state bitmap as a list of names.
+//
+// Unknown bits are rendered as hex rather than masked away, so a bundle from
+// newer firmware stays interpretable for the conditions this build does
+// understand — which is what §4.10 requires of a decoder.
+func HealthStateNames(state uint8) []string {
+	if state == 0 {
+		return nil
+	}
+
+	var (
+		out  []string
+		seen uint8
+	)
+	for _, b := range healthBitNames {
+		if state&b.bit != 0 {
+			out = append(out, b.name)
+			seen |= b.bit
+		}
+	}
+	if unknown := state & ^seen; unknown != 0 {
+		out = append(out, fmt.Sprintf("0x%02x", unknown))
+	}
+	return out
+}
+
+// HealthStateString is HealthStateNames joined with "|", or "OK" when clear.
+func HealthStateString(state uint8) string {
+	names := HealthStateNames(state)
+	if len(names) == 0 {
+		return "OK"
+	}
+	return strings.Join(names, "|")
 }
 
 // ParseDeviceHealth decodes a 16-byte health payload.

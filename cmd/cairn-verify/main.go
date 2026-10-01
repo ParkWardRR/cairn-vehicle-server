@@ -233,6 +233,14 @@ type bundleResult struct {
 	CaptureSegments []segmentResult `json:"capture_segments,omitempty"`
 	JournalSegment  *segmentResult  `json:"journal_segment,omitempty"`
 
+	// HealthStates is every degraded condition the device reported during this
+	// bundle, unioned. Surfaced because it is the device's own account of what
+	// was wrong, and it explains gaps in the data that would otherwise look
+	// like defects.
+	HealthStates   []string `json:"health_states,omitempty"`
+	HealthRecords  int      `json:"health_records,omitempty"`
+	HealthDegraded int      `json:"health_records_degraded,omitempty"`
+
 	Checks   []string `json:"checks"`
 	Problems []string `json:"problems,omitempty"`
 	Notes    []string `json:"notes,omitempty"`
@@ -308,6 +316,7 @@ func verifyBundle(b discoveredBundle, opts options) bundleResult {
 		} else {
 			s := summarize(journal, sr)
 			res.JournalSegment = &s
+			collectHealth(&res, sr)
 		}
 	}
 
@@ -536,6 +545,38 @@ func checkReceipt(res *bundleResult, m *format.Manifest, opts options) {
 	res.pass("receipt verifies and acknowledges this content root")
 }
 
+// collectHealth unions the degraded conditions the device reported.
+//
+// This is the device's own account of what was wrong, and it is worth reading
+// before concluding anything from the data: a trip missing position for ten
+// minutes looks like a defect until the health records say DEGRADED_GNSS, at
+// which point it is an honest record of a tunnel or a cold receiver.
+func collectHealth(res *bundleResult, sr *format.ScanResult) {
+	union := uint8(0)
+
+	for i := range sr.Frames {
+		f := &sr.Frames[i]
+		if f.RecordType != format.RecordDeviceHealth {
+			continue
+		}
+
+		h, err := format.ParseDeviceHealth(f.Payload)
+		if err != nil {
+			res.fail("a DEVICE_HEALTH record at seq %d does not parse: %v",
+				f.Seq, err)
+			continue
+		}
+
+		res.HealthRecords++
+		if h.HealthState != 0 {
+			res.HealthDegraded++
+			union |= h.HealthState
+		}
+	}
+
+	res.HealthStates = format.HealthStateNames(union)
+}
+
 // ── segment helpers ─────────────────────────────────────────────────────────
 
 func segmentNames(dir string) (capture []string, journal string) {
@@ -637,6 +678,20 @@ func report(results []bundleResult, opts options) {
 				s.Name, s.Stop, s.Frames, s.FirstSeq, s.LastSeq)
 			if opts.verbose {
 				printCounts(s.RecordCounts)
+			}
+		}
+
+		if r.HealthRecords > 0 {
+			if len(r.HealthStates) == 0 {
+				fmt.Printf("  health       %d record(s), none degraded\n",
+					r.HealthRecords)
+			} else {
+				// The device's own account of what was wrong. Worth reading before
+				// concluding anything from the data: a trip missing position looks
+				// like a defect until this says DEGRADED_GNSS.
+				fmt.Printf("  health       %d of %d record(s) degraded: %s\n",
+					r.HealthDegraded, r.HealthRecords,
+					strings.Join(r.HealthStates, "|"))
 			}
 		}
 
