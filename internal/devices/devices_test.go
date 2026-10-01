@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ParkWardRR/Cairn/server/format"
+	"time"
 )
 
 func newRegistry(t *testing.T) (*Registry, string) {
@@ -280,5 +281,66 @@ func TestListIsOrderedAndCopied(t *testing.T) {
 	again := r.List()
 	if again[0].Name == "mutated" {
 		t.Error("List returned a reference into the registry's own state")
+	}
+}
+
+// Revoking a device from another process must take effect in a running server
+// without a restart.
+//
+// This is the guarantee that matters when a unit is stolen: the remedy has to
+// be immediate, and a maintenance window is not an acceptable price. The
+// registry reloads when the file's mtime or size changes, and this exercises
+// that path by writing through a second Registry on the same file — which is
+// exactly what `cairn-server -revoke` does while the service is up.
+func TestRevocationTakesEffectWithoutRestart(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "devices.json")
+
+	serving, err := Open(path)
+	if err != nil {
+		t.Fatalf("open serving registry: %v", err)
+	}
+
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+
+	var id [16]byte
+	id[0] = 0x42
+
+	if _, err := serving.Enroll(id, "car", pub, 0); err != nil {
+		t.Fatalf("Enroll: %v", err)
+	}
+	if _, err := serving.Lookup(id); err != nil {
+		t.Fatalf("Lookup after enrol: %v", err)
+	}
+
+	// A second process revokes it.
+	admin, err := Open(path)
+	if err != nil {
+		t.Fatalf("open admin registry: %v", err)
+	}
+	if err := admin.Revoke(id, "stolen"); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+
+	// Some filesystems have coarse mtime granularity, so the size change is
+	// what makes this reliable — and a revocation always grows the record.
+	// Nudge the mtime anyway so the test does not depend on that.
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(path, future, future); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+
+	if _, err := serving.Lookup(id); err == nil {
+		t.Fatal("the serving registry still accepts a revoked device; " +
+			"revocation would need a restart to take effect")
+	}
+
+	// And the signer must be refused too, which is the path an upload takes.
+	keyID := format.DeviceKeyID(pub)
+	if _, err := serving.SignerFor(id, keyID); err == nil {
+		t.Error("SignerFor still returns a key for a revoked device")
 	}
 }

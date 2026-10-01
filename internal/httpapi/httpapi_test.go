@@ -69,8 +69,8 @@ func newEnv(t *testing.T) *env {
 	api := New(Config{
 		Intake: svc, Receipts: rec, Registry: reg, Outbox: ob,
 		Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		// No TLS in httptest, so the certificate binding is exercised
-		// separately in TestClientIdentityBinding.
+		// These tests run over plain HTTP; the certificate binding is
+		// exercised over real TLS in identity_test.go.
 		RequireClientCert: false,
 	})
 

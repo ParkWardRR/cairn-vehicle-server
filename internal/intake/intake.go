@@ -30,6 +30,7 @@ import (
 	"github.com/ParkWardRR/Cairn/server/format"
 	"github.com/ParkWardRR/Cairn/server/internal/cas"
 	"github.com/ParkWardRR/Cairn/server/internal/devices"
+	"github.com/ParkWardRR/Cairn/server/internal/ledger"
 	"github.com/ParkWardRR/Cairn/server/internal/outbox"
 	"github.com/ParkWardRR/Cairn/server/internal/receipts"
 )
@@ -70,6 +71,11 @@ type Service struct {
 	// yet committed. It is a durable directory, not memory, so an offer
 	// survives a server restart mid-transfer.
 	offerDir string
+
+	// ledger records what happened to each bundle and why. Optional: a nil
+	// ledger means no record, never a failed ingest — an audit trail must not
+	// be able to refuse data that is otherwise valid.
+	ledger *ledger.Ledger
 }
 
 // Config configures a Service.
@@ -79,6 +85,21 @@ type Config struct {
 	Registry *devices.Registry
 	Outbox   *outbox.Queue
 	OfferDir string
+
+	// Ledger is optional; nil disables recording.
+	Ledger *ledger.Ledger
+}
+
+// record appends to the ledger, swallowing failures on purpose.
+//
+// A ledger that could fail an upload would be an audit trail with veto power
+// over the data it is auditing. Losing an entry is bad; losing a trip because
+// the audit trail's disk was full is worse.
+func (s *Service) record(e ledger.Entry) {
+	if s.ledger == nil {
+		return
+	}
+	_ = s.ledger.Append(e)
 }
 
 // New creates a Service.
@@ -87,6 +108,7 @@ func New(cfg Config) (*Service, error) {
 		return nil, fmt.Errorf("create offer dir: %w", err)
 	}
 	return &Service{
+		ledger:   cfg.Ledger,
 		cas:      cfg.CAS,
 		receipts: cfg.Receipts,
 		registry: cfg.Registry,
@@ -137,6 +159,16 @@ func (s *Service) Offer(manifestBytes, signature []byte) (*OfferResult, error) {
 
 	pub, err := s.registry.SignerFor(parsed.DeviceID, parsed.DeviceKeyID)
 	if err != nil {
+		// The most common real failure: an unenrolled device. Recorded so the
+		// operator can see it without correlating logs, because from the
+		// device's side this is an opaque 403.
+		s.record(ledger.Entry{
+			Event:       ledger.EventDeviceUnknown,
+			DeviceID:    ledger.HexID(parsed.DeviceID[:]),
+			BundleID:    ledger.HexID(parsed.BundleID[:]),
+			ContentRoot: ledger.HexID(parsed.ContentRoot[:]),
+			Reason:      err.Error(),
+		})
 		return nil, err
 	}
 
@@ -144,10 +176,27 @@ func (s *Service) Offer(manifestBytes, signature []byte) (*OfferResult, error) {
 	// our ability to re-encode.
 	manifest, err := format.VerifyManifest(manifestBytes, signature, pub)
 	if err != nil {
+		s.record(ledger.Entry{
+			Event:       ledger.EventOfferRejected,
+			DeviceID:    ledger.HexID(parsed.DeviceID[:]),
+			BundleID:    ledger.HexID(parsed.BundleID[:]),
+			ContentRoot: ledger.HexID(parsed.ContentRoot[:]),
+			Reason:      "manifest signature did not verify: " + err.Error(),
+		})
 		return nil, fmt.Errorf("verify manifest: %w", err)
 	}
 
 	if err := validateManifestConsistency(manifest); err != nil {
+		// A validly signed but self-contradictory manifest. Worth a distinct
+		// record: a signature attests to authorship, not to coherence, and the
+		// two failures want different fixes.
+		s.record(ledger.Entry{
+			Event:       ledger.EventOfferRejected,
+			DeviceID:    ledger.HexID(manifest.DeviceID[:]),
+			BundleID:    ledger.HexID(manifest.BundleID[:]),
+			ContentRoot: ledger.HexID(manifest.ContentRoot[:]),
+			Reason:      "manifest is self-contradictory: " + err.Error(),
+		})
 		return nil, err
 	}
 
@@ -188,6 +237,14 @@ func (s *Service) Offer(manifestBytes, signature []byte) (*OfferResult, error) {
 	// allowance should learn so before transferring a whole bundle, and it must
 	// keep its local copy rather than being told the upload succeeded.
 	if err := s.checkQuota(manifest.DeviceID, expected); err != nil {
+		s.record(ledger.Entry{
+			Event:       ledger.EventQuotaRefused,
+			DeviceID:    ledger.HexID(manifest.DeviceID[:]),
+			BundleID:    ledger.HexID(manifest.BundleID[:]),
+			ContentRoot: ledger.HexID(manifest.ContentRoot[:]),
+			Bytes:       expected,
+			Reason:      err.Error(),
+		})
 		return nil, err
 	}
 
@@ -195,6 +252,14 @@ func (s *Service) Offer(manifestBytes, signature []byte) (*OfferResult, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	s.record(ledger.Entry{
+		Event:       ledger.EventOffered,
+		DeviceID:    ledger.HexID(manifest.DeviceID[:]),
+		BundleID:    ledger.HexID(manifest.BundleID[:]),
+		ContentRoot: ledger.HexID(manifest.ContentRoot[:]),
+		Bytes:       expected,
+	})
 
 	return &OfferResult{
 		BundleID:         manifest.BundleID,
@@ -457,6 +522,23 @@ func (s *Service) Commit(bundleID [16]byte) (*CommitResult, error) {
 	// simply did not see the first response — the most ordinary failure there
 	// is. Keeping it lets Commit be idempotent on its own terms. Records for
 	// committed bundles are reclaimed by SweepOffers.
+
+	// The entry that matters most: it is the moment the device becomes free to
+	// delete its copy, so it is the record that explains why data no longer
+	// exists on a card.
+	s.record(ledger.Entry{
+		Event:       ledger.EventCommitted,
+		DeviceID:    ledger.HexID(manifest.DeviceID[:]),
+		BundleID:    ledger.HexID(manifest.BundleID[:]),
+		ContentRoot: ledger.HexID(manifest.ContentRoot[:]),
+		Bytes:       bytesStored,
+	})
+	s.record(ledger.Entry{
+		Event:       ledger.EventReceiptIssued,
+		DeviceID:    ledger.HexID(manifest.DeviceID[:]),
+		BundleID:    ledger.HexID(manifest.BundleID[:]),
+		ContentRoot: ledger.HexID(manifest.ContentRoot[:]),
+	})
 
 	return &CommitResult{
 		Receipt:       receipt,

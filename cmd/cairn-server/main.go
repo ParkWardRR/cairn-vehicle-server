@@ -30,6 +30,7 @@ import (
 	"github.com/ParkWardRR/Cairn/server/internal/devices"
 	"github.com/ParkWardRR/Cairn/server/internal/httpapi"
 	"github.com/ParkWardRR/Cairn/server/internal/intake"
+	"github.com/ParkWardRR/Cairn/server/internal/ledger"
 	"github.com/ParkWardRR/Cairn/server/internal/mtls"
 	"github.com/ParkWardRR/Cairn/server/internal/outbox"
 	"github.com/ParkWardRR/Cairn/server/internal/receipts"
@@ -171,11 +172,21 @@ func run(cfg runConfig) error {
 		return fmt.Errorf("open outbox: %w", err)
 	}
 
+	// The lifecycle ledger. On disk rather than in PostgreSQL on purpose:
+	// ingest has no database dependency, and making the audit trail a database
+	// write would quietly give it one.
+	book, err := ledger.Open(filepath.Join(cfg.dataDir, "ledger"))
+	if err != nil {
+		return fmt.Errorf("open ledger: %w", err)
+	}
+	defer book.Close()
+
 	svc, err := intake.New(intake.Config{
 		CAS:      store,
 		Receipts: receiptStore,
 		Registry: registry,
 		Outbox:   queue,
+		Ledger:   book,
 		OfferDir: filepath.Join(cfg.dataDir, "offers"),
 	})
 	if err != nil {
