@@ -443,6 +443,51 @@ type TripEvent struct {
 // the nearest GNSS sample and is never assumed from an event.
 func (e *TripEvent) HasPosition() bool { return e.LatE7 != 0 || e.LonE7 != 0 }
 
+// TRIP_EVENT types (§4.6).
+const (
+	EventTripStart         uint8 = 1
+	EventTripEnd           uint8 = 2
+	EventHarshBrake        uint8 = 3
+	EventHarshAcceleration uint8 = 4
+	EventHarshCornering    uint8 = 5
+	EventImpact            uint8 = 6
+	// EventHarshMotion is decisive dynamics the device could not attribute.
+	// Attribution needs the mounting orientation or a speed signal; with
+	// neither, the motion is real and honestly unlabelled. A guess would be
+	// indistinguishable from a measurement.
+	EventHarshMotion      uint8 = 7
+	EventCaptureRecovered uint8 = 8
+)
+
+// EventTypeName names an event type, or reports the number for one this build
+// does not know.
+//
+// Unknown types are named rather than discarded: a newer device's events should
+// still appear in an older decoder's output with their position and timing
+// intact, which is what §4.6 requires.
+func EventTypeName(t uint8) string {
+	switch t {
+	case EventTripStart:
+		return "TRIP_START"
+	case EventTripEnd:
+		return "TRIP_END"
+	case EventHarshBrake:
+		return "HARSH_BRAKE"
+	case EventHarshAcceleration:
+		return "HARSH_ACCELERATION"
+	case EventHarshCornering:
+		return "HARSH_CORNERING"
+	case EventImpact:
+		return "IMPACT"
+	case EventHarshMotion:
+		return "HARSH_MOTION"
+	case EventCaptureRecovered:
+		return "CAPTURE_RECOVERED"
+	default:
+		return fmt.Sprintf("UNKNOWN_EVENT(%d)", t)
+	}
+}
+
 // ParseTripEvent decodes a variable-length trip event payload.
 func ParseTripEvent(p []byte) (*TripEvent, error) {
 	const minLen = 12

@@ -233,6 +233,11 @@ type bundleResult struct {
 	CaptureSegments []segmentResult `json:"capture_segments,omitempty"`
 	JournalSegment  *segmentResult  `json:"journal_segment,omitempty"`
 
+	// Events the bundle recorded, by name. A HARSH_MOTION among them means the
+	// device saw decisive dynamics it could not attribute — real motion, with
+	// no speed signal to tell braking from cornering.
+	Events map[string]int `json:"events,omitempty"`
+
 	// Policy is the thresholds this bundle was captured under, read from its
 	// own POLICY_SNAPSHOT. Recorded in the bundle precisely so a trip stays
 	// explainable after the thresholds change.
@@ -300,6 +305,7 @@ func verifyBundle(b discoveredBundle, opts options) bundleResult {
 			scannedCounts[rt] += n
 		}
 		collectPolicy(&res, sr)
+		collectEvents(&res, sr)
 		scannedFrames += len(sr.Frames)
 		totalDiscarded += sr.DiscardedTailBytes
 
@@ -571,6 +577,29 @@ func collectPolicy(res *bundleResult, sr *format.ScanResult) {
 	}
 }
 
+// collectEvents tallies trip events by name.
+func collectEvents(res *bundleResult, sr *format.ScanResult) {
+	for i := range sr.Frames {
+		f := &sr.Frames[i]
+		if f.RecordType != format.RecordTripEvent {
+			continue
+		}
+
+		e, err := format.ParseTripEvent(f.Payload)
+		if err != nil {
+			res.fail("a TRIP_EVENT at seq %d does not parse: %v", f.Seq, err)
+			continue
+		}
+
+		if res.Events == nil {
+			res.Events = map[string]int{}
+		}
+		// Named rather than numbered, including types this build does not
+		// know: an unrecognized event still happened.
+		res.Events[format.EventTypeName(e.EventType)]++
+	}
+}
+
 // collectHealth unions the degraded conditions the device reported.
 //
 // This is the device's own account of what was wrong, and it is worth reading
@@ -726,6 +755,23 @@ func report(results []bundleResult, opts options) {
 			// interpreted without knowing which firmware wrote it.
 			fmt.Printf("  policy       not recorded — this bundle does not " +
 				"describe its own thresholds\n")
+		}
+
+		if len(r.Events) > 0 {
+			names := make([]string, 0, len(r.Events))
+			for k := range r.Events {
+				names = append(names, k)
+			}
+			sort.Strings(names)
+
+			fmt.Printf("  events      ")
+			for i, n := range names {
+				if i > 0 {
+					fmt.Printf(",")
+				}
+				fmt.Printf(" %s x%d", n, r.Events[n])
+			}
+			fmt.Println()
 		}
 
 		if r.HealthRecords > 0 {

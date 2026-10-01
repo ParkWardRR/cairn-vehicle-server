@@ -30,6 +30,7 @@ import (
 	"github.com/ParkWardRR/Cairn/server/internal/cas"
 	"github.com/ParkWardRR/Cairn/server/internal/decode"
 	"github.com/ParkWardRR/Cairn/server/internal/devices"
+	"github.com/ParkWardRR/Cairn/server/internal/ledger"
 	"github.com/ParkWardRR/Cairn/server/internal/mqtt"
 	"github.com/ParkWardRR/Cairn/server/internal/outbox"
 	"github.com/ParkWardRR/Cairn/server/internal/receipts"
@@ -109,6 +110,15 @@ func run(cfg runConfig) error {
 		return fmt.Errorf("open outbox: %w", err)
 	}
 
+	// The same ledger directory the server writes to. Two processes appending
+	// to the same daily file is safe: every entry is a single write of a
+	// complete line, and O_APPEND makes that atomic for the sizes involved.
+	book, err := ledger.Open(filepath.Join(cfg.dataDir, "ledger"))
+	if err != nil {
+		return fmt.Errorf("open ledger: %w", err)
+	}
+	defer book.Close()
+
 	db, err := store.Open(ctx, cfg.dsn)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
@@ -164,6 +174,7 @@ func run(cfg runConfig) error {
 		Outbox:       queue,
 		Store:        db,
 		Decoder:      decode.New(casStore),
+		Ledger:       book,
 		Publish:      pub,
 		Log:          cfg.log,
 		PollInterval: cfg.pollInterval,

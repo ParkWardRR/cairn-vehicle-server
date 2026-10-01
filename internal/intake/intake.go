@@ -493,6 +493,27 @@ func (s *Service) Commit(bundleID [16]byte) (*CommitResult, error) {
 		return nil, err
 	}
 
+	// Recorded here, not at the end of the function, so ledger order matches
+	// causal order. The receipt exists at this point and the decode job does
+	// not; writing these later put decode_queued *before* committed, which
+	// would tell a reader the job was enqueued for a bundle that was not yet
+	// committed. Ordering is most of what a ledger is for.
+	s.record(ledger.Entry{
+		Event:       ledger.EventCommitted,
+		DeviceID:    ledger.HexID(manifest.DeviceID[:]),
+		BundleID:    ledger.HexID(manifest.BundleID[:]),
+		ContentRoot: ledger.HexID(manifest.ContentRoot[:]),
+		Bytes:       bytesStored,
+	})
+	// The moment the device becomes free to delete its copy, and therefore the
+	// record that explains why data no longer exists on a card.
+	s.record(ledger.Entry{
+		Event:       ledger.EventReceiptIssued,
+		DeviceID:    ledger.HexID(manifest.DeviceID[:]),
+		BundleID:    ledger.HexID(manifest.BundleID[:]),
+		ContentRoot: ledger.HexID(manifest.ContentRoot[:]),
+	})
+
 	// Enqueued after the receipt, deliberately. A lost decode job costs a
 	// re-derive from raw; a lost receipt could cost the data itself.
 	if s.outbox != nil {
@@ -506,7 +527,17 @@ func (s *Service) Commit(bundleID [16]byte) (*CommitResult, error) {
 		}
 		if err := s.outbox.Append(entry); err != nil {
 			// The bundle is committed and receipted; the device is safe. Report
-			// the enqueue failure rather than failing the upload.
+			// the enqueue failure rather than failing the upload — but record
+			// it, because this is the case where the data is durable and the
+			// derived view will silently never appear.
+			s.record(ledger.Entry{
+				Event:       ledger.EventDecodeFailed,
+				DeviceID:    ledger.HexID(manifest.DeviceID[:]),
+				BundleID:    ledger.HexID(manifest.BundleID[:]),
+				ContentRoot: ledger.HexID(manifest.ContentRoot[:]),
+				Reason: "committed and receipted, but enqueueing decode work " +
+					"failed: " + err.Error(),
+			})
 			return &CommitResult{
 				Receipt:       receipt,
 				ReceiptBytes:  encoded,
@@ -515,6 +546,13 @@ func (s *Service) Commit(bundleID [16]byte) (*CommitResult, error) {
 				BytesStored:   bytesStored,
 			}, fmt.Errorf("bundle committed and receipted, but enqueueing decode work failed: %w", err)
 		}
+
+		s.record(ledger.Entry{
+			Event:       ledger.EventDecodeQueued,
+			DeviceID:    ledger.HexID(manifest.DeviceID[:]),
+			BundleID:    ledger.HexID(manifest.BundleID[:]),
+			ContentRoot: ledger.HexID(manifest.ContentRoot[:]),
+		})
 	}
 
 	// The offer record is deliberately retained. Deleting it here would make a
@@ -522,23 +560,6 @@ func (s *Service) Commit(bundleID [16]byte) (*CommitResult, error) {
 	// simply did not see the first response — the most ordinary failure there
 	// is. Keeping it lets Commit be idempotent on its own terms. Records for
 	// committed bundles are reclaimed by SweepOffers.
-
-	// The entry that matters most: it is the moment the device becomes free to
-	// delete its copy, so it is the record that explains why data no longer
-	// exists on a card.
-	s.record(ledger.Entry{
-		Event:       ledger.EventCommitted,
-		DeviceID:    ledger.HexID(manifest.DeviceID[:]),
-		BundleID:    ledger.HexID(manifest.BundleID[:]),
-		ContentRoot: ledger.HexID(manifest.ContentRoot[:]),
-		Bytes:       bytesStored,
-	})
-	s.record(ledger.Entry{
-		Event:       ledger.EventReceiptIssued,
-		DeviceID:    ledger.HexID(manifest.DeviceID[:]),
-		BundleID:    ledger.HexID(manifest.BundleID[:]),
-		ContentRoot: ledger.HexID(manifest.ContentRoot[:]),
-	})
 
 	return &CommitResult{
 		Receipt:       receipt,

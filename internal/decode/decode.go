@@ -556,8 +556,9 @@ func (r *Result) decodeFrame(manifest *format.Manifest, f *format.Frame, segment
 			OccurredAt: observedAt(manifest, f.MonotonicMS, 0),
 			Seq:        f.Seq,
 			Detail: map[string]any{
-				"event_type": e.EventType,
-				"detail":     e.Detail,
+				"event_type":      e.EventType,
+				"event_type_name": format.EventTypeName(e.EventType),
+				"detail":          e.Detail,
 			},
 		}
 		if e.HasPosition() {

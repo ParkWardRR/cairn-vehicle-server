@@ -25,6 +25,7 @@ import (
 	"github.com/ParkWardRR/Cairn/server/internal/cas"
 	"github.com/ParkWardRR/Cairn/server/internal/decode"
 	"github.com/ParkWardRR/Cairn/server/internal/devices"
+	"github.com/ParkWardRR/Cairn/server/internal/ledger"
 	"github.com/ParkWardRR/Cairn/server/internal/outbox"
 	"github.com/ParkWardRR/Cairn/server/internal/receipts"
 	"github.com/ParkWardRR/Cairn/server/internal/store"
@@ -62,6 +63,11 @@ type Config struct {
 	CAS      *cas.Store
 	Registry *devices.Registry
 	Receipts *receipts.Store
+
+	// Ledger records decode outcomes. Optional: a nil ledger means no record,
+	// never a failed decode — the same rule ingest follows, because an audit
+	// trail that can fail the work it audits is the wrong shape.
+	Ledger *ledger.Ledger
 
 	// PollInterval is how often an idle worker checks for work.
 	PollInterval time.Duration
@@ -160,6 +166,16 @@ func (w *Worker) DrainOnce(ctx context.Context) (int, error) {
 		}
 
 		w.clearFailure(entry.Seq)
+
+		// After the ack, so the entry means "decoded and acknowledged" rather
+		// than "decoded, possibly to be redelivered".
+		w.record(ledger.Entry{
+			Event:       ledger.EventDecodeOK,
+			BundleID:    entry.BundleID,
+			DeviceID:    entry.DeviceID,
+			ContentRoot: entry.ContentRoot,
+		})
+
 		done++
 	}
 
@@ -348,6 +364,14 @@ func (w *Worker) shouldSkip(seq uint64) bool {
 	return w.attempts[seq] >= w.cfg.MaxAttempts
 }
 
+// record appends to the ledger, swallowing failures deliberately.
+func (w *Worker) record(e ledger.Entry) {
+	if w.cfg.Ledger == nil {
+		return
+	}
+	_ = w.cfg.Ledger.Append(e)
+}
+
 func (w *Worker) recordFailure(entry outbox.Entry, err error) {
 	w.mu.Lock()
 	w.attempts[entry.Seq]++
@@ -361,6 +385,18 @@ func (w *Worker) recordFailure(entry outbox.Entry, err error) {
 		w.log.Error("parking job after repeated failures; the raw bundle is unaffected "+
 			"and can be reprocessed once the cause is fixed",
 			"seq", entry.Seq, "bundle", entry.BundleID, "attempts", n, "error", err)
+
+		// Only a parked job gets a ledger entry. A retry is not an outcome —
+		// recording every attempt would bury the one entry that matters under
+		// transient noise, and the job may still succeed.
+		w.record(ledger.Entry{
+			Event:       ledger.EventDecodeFailed,
+			BundleID:    entry.BundleID,
+			DeviceID:    entry.DeviceID,
+			ContentRoot: entry.ContentRoot,
+			Reason: fmt.Sprintf("parked after %d attempts: %v; the raw bundle "+
+				"is intact and can be reprocessed", n, err),
+		})
 		return
 	}
 
