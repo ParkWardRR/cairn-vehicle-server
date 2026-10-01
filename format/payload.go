@@ -488,6 +488,30 @@ func EventTypeName(t uint8) string {
 	}
 }
 
+// MaxEventDetail bounds the detail string, matching the firmware's field.
+const MaxEventDetail = 48
+
+// EncodeTripEvent builds a TRIP_EVENT payload (§4.6).
+//
+// A detail longer than MaxEventDetail is truncated rather than rejected: the
+// event itself matters more than its annotation, and refusing to record a hard
+// stop because its description was long would be the wrong trade.
+func EncodeTripEvent(eventType uint8, latE7, lonE7 int32, detail string) ([]byte, error) {
+	if len(detail) > MaxEventDetail {
+		detail = detail[:MaxEventDetail]
+	}
+
+	out := make([]byte, 12+len(detail))
+	out[0] = eventType
+	out[1] = uint8(len(detail))
+	// out[2:4] reserved, zero
+	binary.LittleEndian.PutUint32(out[4:8], uint32(latE7))
+	binary.LittleEndian.PutUint32(out[8:12], uint32(lonE7))
+	copy(out[12:], detail)
+
+	return out, nil
+}
+
 // ParseTripEvent decodes a variable-length trip event payload.
 func ParseTripEvent(p []byte) (*TripEvent, error) {
 	const minLen = 12

@@ -1,6 +1,7 @@
 package format
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
@@ -61,6 +62,34 @@ type vectorExpectation struct {
 		RootHex string   `json:"root_hex"`
 		Leaves  []string `json:"leaves_hex"`
 	} `json:"merkle"`
+
+	Policy *PolicySnapshot `json:"policy"`
+
+	Events *struct {
+		Events []struct {
+			EventType     uint8  `json:"event_type"`
+			EventTypeName string `json:"event_type_name"`
+			LatE7         int32  `json:"lat_e7"`
+			LonE7         int32  `json:"lon_e7"`
+			Detail        string `json:"detail"`
+		} `json:"events"`
+	} `json:"events"`
+
+	Health *struct {
+		Records []struct {
+			HealthState uint8    `json:"health_state"`
+			Names       []string `json:"names"`
+		} `json:"records"`
+	} `json:"health"`
+
+	Update *struct {
+		SignatureValid     bool   `json:"signature_valid"`
+		FirmwareVersion    string `json:"firmware_version"`
+		MinFirmwareVersion string `json:"min_firmware_version"`
+		ImageSHA256Hex     string `json:"image_sha256_hex"`
+		ImageLength        uint32 `json:"image_length"`
+		UpdateKeyHex       string `json:"update_public_key_hex"`
+	} `json:"update"`
 }
 
 func TestConformanceVectors(t *testing.T) {
@@ -91,6 +120,16 @@ func TestConformanceVectors(t *testing.T) {
 
 		t.Run(e.Name(), func(t *testing.T) {
 			switch {
+			case exp.Events != nil, exp.Health != nil:
+				// These carry a scan as well, so the frames are walked and the
+				// payloads checked against the same bytes.
+				checkScanVector(t, dir, &exp)
+				if exp.Events != nil {
+					checkEventsVector(t, dir, &exp)
+				}
+				if exp.Health != nil {
+					checkHealthVector(t, dir, &exp)
+				}
 			case exp.Scan != nil:
 				checkScanVector(t, dir, &exp)
 			case exp.Header != nil:
@@ -101,6 +140,10 @@ func TestConformanceVectors(t *testing.T) {
 				checkReceiptVector(t, dir, &exp)
 			case exp.Merkle != nil:
 				checkMerkleVector(t, &exp)
+			case exp.Policy != nil:
+				checkPolicyVector(t, dir, &exp)
+			case exp.Update != nil:
+				checkUpdateVector(t, dir, &exp)
 			default:
 				t.Skip("no checkable expectation")
 			}
@@ -310,4 +353,195 @@ func checkMerkleVector(t *testing.T, exp *vectorExpectation) {
 
 	// Otherwise it is a content-root vector described by members.json.
 	t.Skip("content root checked via members.json in TestContentRootIsOrderIndependent")
+}
+
+// checkPolicyVector verifies the committed payload decodes to the expected
+// values *and* re-encodes to the same bytes.
+//
+// The re-encode is the point. Two bundles captured under identical policy must
+// have byte-identical snapshots, which is what lets a reader group them without
+// trusting the version number — and only a committed payload can demonstrate
+// that across implementations.
+func checkPolicyVector(t *testing.T, dir string, exp *vectorExpectation) {
+	raw, err := os.ReadFile(filepath.Join(dir, "policy.cbor"))
+	if err != nil {
+		t.Fatalf("read policy.cbor: %v", err)
+	}
+
+	got, err := ParsePolicySnapshot(raw)
+	if err != nil {
+		t.Fatalf("ParsePolicySnapshot: %v", err)
+	}
+
+	if *got != *exp.Policy {
+		t.Errorf("decoded policy does not match the expectation\n got: %+v\nwant: %+v",
+			*got, *exp.Policy)
+	}
+
+	reencoded, err := got.MarshalCBOR()
+	if err != nil {
+		t.Fatalf("MarshalCBOR: %v", err)
+	}
+	if !bytes.Equal(reencoded, raw) {
+		t.Errorf("re-encoding produced %d bytes, want the committed %d — this "+
+			"implementation does not produce byte-identical output",
+			len(reencoded), len(raw))
+	}
+}
+
+// checkEventsVector walks the segment and checks every trip event, including
+// the unknown type that must be named rather than discarded.
+func checkEventsVector(t *testing.T, dir string, exp *vectorExpectation) {
+	b, err := os.ReadFile(filepath.Join(dir, "segment.bin"))
+	if err != nil {
+		t.Fatalf("read segment.bin: %v", err)
+	}
+
+	res, err := ScanSegment(b, ScanState{})
+	if err != nil {
+		t.Fatalf("ScanSegment: %v", err)
+	}
+
+	var seen int
+	for i := range res.Frames {
+		f := &res.Frames[i]
+		if f.RecordType != RecordTripEvent {
+			continue
+		}
+		if seen >= len(exp.Events.Events) {
+			t.Fatalf("segment holds more events than the expectation names")
+		}
+		want := exp.Events.Events[seen]
+		seen++
+
+		e, err := ParseTripEvent(f.Payload)
+		if err != nil {
+			t.Errorf("event %d does not parse: %v", seen-1, err)
+			continue
+		}
+
+		if e.EventType != want.EventType {
+			t.Errorf("event %d type = %d, want %d", seen-1, e.EventType, want.EventType)
+		}
+		if name := EventTypeName(e.EventType); name != want.EventTypeName {
+			t.Errorf("event %d name = %q, want %q", seen-1, name, want.EventTypeName)
+		}
+		if e.LatE7 != want.LatE7 || e.LonE7 != want.LonE7 {
+			t.Errorf("event %d position = (%d, %d), want (%d, %d)", seen-1,
+				e.LatE7, e.LonE7, want.LatE7, want.LonE7)
+		}
+		if e.Detail != want.Detail {
+			t.Errorf("event %d detail = %q, want %q", seen-1, e.Detail, want.Detail)
+		}
+
+		// Re-encoding must reproduce the payload, or an implementation could
+		// read these records and not write them.
+		reencoded, err := EncodeTripEvent(e.EventType, e.LatE7, e.LonE7, e.Detail)
+		if err != nil {
+			t.Errorf("event %d will not re-encode: %v", seen-1, err)
+		} else if !bytes.Equal(reencoded, f.Payload) {
+			t.Errorf("event %d re-encodes to different bytes", seen-1)
+		}
+	}
+
+	if seen != len(exp.Events.Events) {
+		t.Errorf("found %d events, want %d", seen, len(exp.Events.Events))
+	}
+}
+
+// checkHealthVector walks the segment and checks each degraded-state bitmap,
+// including that the reserved bit survives.
+func checkHealthVector(t *testing.T, dir string, exp *vectorExpectation) {
+	b, err := os.ReadFile(filepath.Join(dir, "segment.bin"))
+	if err != nil {
+		t.Fatalf("read segment.bin: %v", err)
+	}
+
+	res, err := ScanSegment(b, ScanState{})
+	if err != nil {
+		t.Fatalf("ScanSegment: %v", err)
+	}
+
+	var seen int
+	for i := range res.Frames {
+		f := &res.Frames[i]
+		if f.RecordType != RecordDeviceHealth {
+			continue
+		}
+		if seen >= len(exp.Health.Records) {
+			t.Fatalf("segment holds more health records than the expectation names")
+		}
+		want := exp.Health.Records[seen]
+		seen++
+
+		h, err := ParseDeviceHealth(f.Payload)
+		if err != nil {
+			t.Errorf("health record %d does not parse: %v", seen-1, err)
+			continue
+		}
+
+		if h.HealthState != want.HealthState {
+			t.Errorf("health record %d state = %#02x, want %#02x", seen-1,
+				h.HealthState, want.HealthState)
+		}
+
+		names := HealthStateNames(h.HealthState)
+		if len(names) != len(want.Names) {
+			t.Errorf("health record %d named %v, want %v", seen-1, names, want.Names)
+			continue
+		}
+		for j := range names {
+			if names[j] != want.Names[j] {
+				t.Errorf("health record %d name %d = %q, want %q", seen-1, j,
+					names[j], want.Names[j])
+			}
+		}
+	}
+
+	if seen != len(exp.Health.Records) {
+		t.Errorf("found %d health records, want %d", seen, len(exp.Health.Records))
+	}
+}
+
+// checkUpdateVector verifies the OTA descriptor signature against the pinned
+// update key, which is deliberately not the receipt key.
+func checkUpdateVector(t *testing.T, dir string, exp *vectorExpectation) {
+	encoded, err := os.ReadFile(filepath.Join(dir, "descriptor.cbor"))
+	if err != nil {
+		t.Fatalf("read descriptor.cbor: %v", err)
+	}
+	sig, err := os.ReadFile(filepath.Join(dir, "descriptor.sig"))
+	if err != nil {
+		t.Fatalf("read descriptor.sig: %v", err)
+	}
+
+	keyRaw, err := hex.DecodeString(exp.Update.UpdateKeyHex)
+	if err != nil || len(keyRaw) != ed25519.PublicKeySize {
+		t.Fatalf("update_public_key_hex is not a 32-byte key")
+	}
+
+	d, err := VerifyUpdateDescriptor(encoded, sig, ed25519.PublicKey(keyRaw))
+	switch {
+	case exp.Update.SignatureValid && err != nil:
+		t.Fatalf("signature should verify: %v", err)
+	case !exp.Update.SignatureValid && err == nil:
+		t.Fatal("signature verified but the vector expects it to fail")
+	case !exp.Update.SignatureValid:
+		return
+	}
+
+	if d.FirmwareVersion != exp.Update.FirmwareVersion {
+		t.Errorf("firmware_version = %q, want %q", d.FirmwareVersion,
+			exp.Update.FirmwareVersion)
+	}
+	if d.MinFirmwareVersion != exp.Update.MinFirmwareVersion {
+		t.Errorf("min_firmware_version = %q, want %q", d.MinFirmwareVersion,
+			exp.Update.MinFirmwareVersion)
+	}
+	if d.ImageLength != exp.Update.ImageLength {
+		t.Errorf("image_length = %d, want %d", d.ImageLength, exp.Update.ImageLength)
+	}
+	if got := hex.EncodeToString(d.ImageSHA256[:]); got != exp.Update.ImageSHA256Hex {
+		t.Errorf("image_sha256 = %s, want %s", got, exp.Update.ImageSHA256Hex)
+	}
 }

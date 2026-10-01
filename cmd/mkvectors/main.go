@@ -33,6 +33,11 @@ import (
 // these are test artifacts, never used to sign anything real.
 var (
 	deviceKeySeed = []byte("cairn-format-v2-device-key-seed!")
+	// A third fixed seed for the OTA update key, kept separate from both the
+	// device and server keys because the authority it carries is different: it
+	// says "this code is safe to run" rather than "this data is mine" or "this
+	// data is safe to delete".
+	updateKeySeed = []byte("cairn-format-v2-update-key-seed!")
 	serverKeySeed = []byte("cairn-format-v2-server-key-seed!")
 )
 
@@ -48,11 +53,15 @@ type expectation struct {
 	Description string `json:"description"`
 	Asserts     string `json:"asserts"`
 
-	Scan     *scanExpectation     `json:"scan,omitempty"`
-	Header   *headerExpectation   `json:"header,omitempty"`
-	Manifest *manifestExpectation `json:"manifest,omitempty"`
-	Receipt  *receiptExpectation  `json:"receipt,omitempty"`
-	Merkle   *merkleExpectation   `json:"merkle,omitempty"`
+	Scan     *scanExpectation       `json:"scan,omitempty"`
+	Header   *headerExpectation     `json:"header,omitempty"`
+	Manifest *manifestExpectation   `json:"manifest,omitempty"`
+	Receipt  *receiptExpectation    `json:"receipt,omitempty"`
+	Merkle   *merkleExpectation     `json:"merkle,omitempty"`
+	Policy   *format.PolicySnapshot `json:"policy,omitempty"`
+	Events   *eventsExpectation     `json:"events,omitempty"`
+	Health   *healthExpectation     `json:"health,omitempty"`
+	Update   *updateExpectation     `json:"update,omitempty"`
 }
 
 type scanExpectation struct {
@@ -85,6 +94,39 @@ type receiptExpectation struct {
 	UploadedRootHex    string `json:"uploaded_content_root_hex"`
 	ReceiptRootHex     string `json:"receipt_content_root_hex"`
 	ServerPublicKeyHex string `json:"server_public_key_hex"`
+}
+
+type expectedEvent struct {
+	EventType     uint8  `json:"event_type"`
+	EventTypeName string `json:"event_type_name"`
+	LatE7         int32  `json:"lat_e7"`
+	LonE7         int32  `json:"lon_e7"`
+	Detail        string `json:"detail"`
+}
+
+type eventsExpectation struct {
+	Events []expectedEvent `json:"events"`
+	Note   string          `json:"note"`
+}
+
+type expectedHealth struct {
+	HealthState uint8    `json:"health_state"`
+	Names       []string `json:"names"`
+}
+
+type healthExpectation struct {
+	Records []expectedHealth `json:"records"`
+	Note    string           `json:"note"`
+}
+
+type updateExpectation struct {
+	SignatureValid     bool   `json:"signature_valid"`
+	FirmwareVersion    string `json:"firmware_version"`
+	MinFirmwareVersion string `json:"min_firmware_version"`
+	ImageSHA256Hex     string `json:"image_sha256_hex"`
+	ImageLength        uint32 `json:"image_length"`
+	UpdateKeyHex       string `json:"update_public_key_hex"`
+	Note               string `json:"note"`
 }
 
 type merkleExpectation struct {
@@ -131,6 +173,11 @@ func run(outDir string) error {
 		vectorManifestBadSignature,
 		vectorReceiptValid,
 		vectorReceiptWrongContentRoot,
+		vectorPolicySnapshot,
+		vectorTripEventTypes,
+		vectorHealthBitmap,
+		vectorUpdateDescriptorValid,
+		vectorUpdateDescriptorBadSignature,
 	}
 
 	for _, build := range builders {
@@ -929,4 +976,256 @@ and never sign anything real.
 `, count)
 
 	return os.WriteFile(filepath.Join(dir, "README.md"), []byte(readme), 0o644)
+}
+
+// ── POLICY_SNAPSHOT ─────────────────────────────────────────────────────────
+
+// A bundle's own account of the thresholds it was captured under. The payload
+// is committed so that an implementation encoding the same policy to different
+// bytes is caught — which is the whole reason the encoding is deterministic.
+func vectorPolicySnapshot(dir string, _, _ ed25519.PrivateKey) error {
+	p := format.PolicySnapshot{
+		PolicyVersion:         1,
+		GNSSPeriodMS:          1000,
+		IMUWindowMS:           1000,
+		OBDPeriodMS:           2000,
+		HealthPeriodMS:        30000,
+		StartScoreThresholdE2: 150,
+		StopScoreThresholdE2:  40,
+		StartDwellMS:          3000,
+		StopDwellMS:           120000,
+		MotionAccelRMSmg:      120,
+		MotionSpeedCMPS:       280,
+		PrerollWindowMS:       45000,
+		PrerollRingSamples:    128,
+		SegmentMaxBytes:       1048576,
+		AdaptiveSampling:      true,
+	}
+
+	encoded, err := p.MarshalCBOR()
+	if err != nil {
+		return err
+	}
+
+	return writeVector(dir, "policy-snapshot", &expectation{
+		Name:        "policy-snapshot",
+		Description: "A POLICY_SNAPSHOT carrying the default capture policy.",
+		Asserts: "The deterministic CBOR encoding is reproducible byte-for-byte, " +
+			"so two bundles captured under identical policy have identical " +
+			"snapshots and can be grouped without trusting the version number. " +
+			"A version number identifies a policy but does not describe one.",
+		// The real struct, not a parallel copy: a second definition is one
+		// more thing to keep in step, and the vector exists to catch drift.
+		Policy: &p,
+	}, map[string][]byte{"policy.cbor": encoded})
+}
+
+// ── TRIP_EVENT ──────────────────────────────────────────────────────────────
+
+// Every defined event type, including the one that exists to admit ignorance.
+func vectorTripEventTypes(dir string, _, _ ed25519.PrivateKey) error {
+	type spec struct {
+		t      uint8
+		lat    int32
+		lon    int32
+		detail string
+	}
+
+	specs := []spec{
+		{format.EventTripStart, 340000000, -1185000000, ""},
+		{format.EventHarshBrake, 340000100, -1185000100, "rms=1800mg dv=-640cm/s"},
+		{format.EventHarshAcceleration, 340000200, -1185000200, "dv=+710cm/s"},
+		{format.EventHarshCornering, 340000300, -1185000300, "lateral"},
+		{format.EventImpact, 0, 0, "rms=2400mg"},
+		{format.EventHarshMotion, 0, 0, "no speed signal"},
+		{format.EventCaptureRecovered, 0, 0, "state=1 discarded=40"},
+		{format.EventTripEnd, 340000400, -1185000400, ""},
+		// An event type this build does not define. A decoder must name it
+		// rather than discard the record, so a newer device's events still
+		// appear with their position and timing intact.
+		{200, 340000500, -1185000500, "from newer firmware"},
+	}
+
+	w := format.NewSegmentWriter(testHeader(0), format.ScanState{})
+
+	var expected []expectedEvent
+	for i, sp := range specs {
+		payload, err := format.EncodeTripEvent(sp.t, sp.lat, sp.lon, sp.detail)
+		if err != nil {
+			return err
+		}
+		if err := w.Append(format.RecordTripEvent, 1, 0, uint32(i*500), payload); err != nil {
+			return err
+		}
+		expected = append(expected, expectedEvent{
+			EventType:     sp.t,
+			EventTypeName: format.EventTypeName(sp.t),
+			LatE7:         sp.lat,
+			LonE7:         sp.lon,
+			Detail:        sp.detail,
+		})
+	}
+
+	exp, err := scanExpect(w.Bytes(), format.ScanState{})
+	if err != nil {
+		return err
+	}
+
+	return writeVector(dir, "trip-event-types", &expectation{
+		Name:        "trip-event-types",
+		Description: "One TRIP_EVENT of every defined type, plus one unknown type.",
+		Asserts: "Each event decodes with its position and detail intact. " +
+			"HARSH_MOTION carries no attribution on purpose: braking and " +
+			"cornering are indistinguishable without the mounting orientation " +
+			"or a speed signal, and a guessed label would be indistinguishable " +
+			"from a measured one. An unknown type is named, never discarded.",
+		Scan: exp,
+		Events: &eventsExpectation{
+			Events: expected,
+			Note: "lat_e7/lon_e7 are zero when no valid fix was available; " +
+				"position validity travels with the nearest GNSS_SAMPLE.",
+		},
+	}, segmentFiles(w.Bytes()))
+}
+
+// ── degraded-state bitmap ───────────────────────────────────────────────────
+
+// The bitmap exists so simultaneous conditions all survive. A scalar severity
+// would force a priority between them and discard the rest.
+func vectorHealthBitmap(dir string, _, _ ed25519.PrivateKey) error {
+	states := []uint8{
+		0,
+		format.HealthDegradedGNSS,
+		format.HealthDegradedGNSS | format.HealthDegradedTime | format.HealthLowPower,
+		format.HealthDegradedStorage | format.HealthRecoveryRequired,
+		// Includes the reserved bit, which a decoder must preserve rather than
+		// mask away.
+		format.HealthDegradedTime | 0x80,
+	}
+
+	w := format.NewSegmentWriter(testHeader(0), format.ScanState{})
+
+	var expected []expectedHealth
+	for i, st := range states {
+		payload := make([]byte, 16)
+		payload[12] = st
+		payload[13] = uint8(i)
+		if err := w.Append(format.RecordDeviceHealth, 1, 0, uint32(i*1000), payload); err != nil {
+			return err
+		}
+
+		names := format.HealthStateNames(st)
+		if names == nil {
+			names = []string{}
+		}
+		expected = append(expected, expectedHealth{HealthState: st, Names: names})
+	}
+
+	exp, err := scanExpect(w.Bytes(), format.ScanState{})
+	if err != nil {
+		return err
+	}
+
+	return writeVector(dir, "health-bitmap", &expectation{
+		Name:        "health-bitmap",
+		Description: "DEVICE_HEALTH records covering no degradation, one condition, several at once, and a reserved bit.",
+		Asserts: "health_state is a bitmap, not a severity. Several conditions " +
+			"are active simultaneously and every one must be recoverable: a low " +
+			"battery must not hide an unavailable fix. An unknown bit is " +
+			"preserved rather than masked, so a bundle from newer firmware stays " +
+			"interpretable for the conditions this build does understand.",
+		Scan: exp,
+		Health: &healthExpectation{
+			Records: expected,
+			Note:    "0x00 means no condition on the list is active, which is not the same as healthy in every respect.",
+		},
+	}, segmentFiles(w.Bytes()))
+}
+
+// ── update descriptor ───────────────────────────────────────────────────────
+
+func buildUpdateDescriptor() format.UpdateDescriptor {
+	var image [32]byte
+	for i := range image {
+		image[i] = byte(0x10 + i)
+	}
+
+	return format.UpdateDescriptor{
+		DescriptorVersion:  format.UpdateDescriptorVersion,
+		FirmwareVersion:    "cairn-v2.1.0",
+		ImageSHA256:        image,
+		ImageLength:        1114112,
+		MinFirmwareVersion: "cairn-v2.0.0",
+		BuildUTCMS:         1790000123456,
+		SignatureAlgorithm: format.SignatureAlgorithmEd25519,
+	}
+}
+
+func vectorUpdateDescriptorValid(dir string, _, _ ed25519.PrivateKey) error {
+	priv := ed25519.NewKeyFromSeed(updateKeySeed)
+	pub := priv.Public().(ed25519.PublicKey)
+
+	d := buildUpdateDescriptor()
+	encoded, sig, err := d.Sign(priv)
+	if err != nil {
+		return err
+	}
+
+	return writeVector(dir, "update-descriptor-valid", &expectation{
+		Name:        "update-descriptor-valid",
+		Description: "A correctly signed OTA update descriptor.",
+		Asserts: "The signature covers exactly the bytes of descriptor.cbor, " +
+			"verified against an update key that is deliberately separate from " +
+			"the receipt key. A device downloads megabytes on the strength of " +
+			"this check, so it must be made before anything in the descriptor " +
+			"is used.",
+		Update: &updateExpectation{
+			SignatureValid:     true,
+			FirmwareVersion:    d.FirmwareVersion,
+			MinFirmwareVersion: d.MinFirmwareVersion,
+			ImageSHA256Hex:     hex.EncodeToString(d.ImageSHA256[:]),
+			ImageLength:        d.ImageLength,
+			UpdateKeyHex:       hex.EncodeToString(pub),
+			Note: "The receipt key says this data is safe to delete; the update " +
+				"key says this code is safe to run. Different authorities, so " +
+				"different keys.",
+		},
+	}, map[string][]byte{
+		"descriptor.cbor": encoded,
+		"descriptor.sig":  sig,
+	})
+}
+
+func vectorUpdateDescriptorBadSignature(dir string, _, _ ed25519.PrivateKey) error {
+	priv := ed25519.NewKeyFromSeed(updateKeySeed)
+	pub := priv.Public().(ed25519.PublicKey)
+
+	d := buildUpdateDescriptor()
+	encoded, sig, err := d.Sign(priv)
+	if err != nil {
+		return err
+	}
+
+	tampered := append([]byte(nil), sig...)
+	tampered[0] ^= 0x01
+
+	return writeVector(dir, "update-descriptor-bad-signature", &expectation{
+		Name:        "update-descriptor-bad-signature",
+		Description: "A valid descriptor whose signature has one flipped bit.",
+		Asserts: "Verification fails and nothing is installed. This is the one " +
+			"signature whose failure mode is an unbootable device, so a " +
+			"descriptor that parses must still be refused when the signature " +
+			"does not verify.",
+		Update: &updateExpectation{
+			SignatureValid:     false,
+			FirmwareVersion:    d.FirmwareVersion,
+			MinFirmwareVersion: d.MinFirmwareVersion,
+			ImageSHA256Hex:     hex.EncodeToString(d.ImageSHA256[:]),
+			ImageLength:        d.ImageLength,
+			UpdateKeyHex:       hex.EncodeToString(pub),
+		},
+	}, map[string][]byte{
+		"descriptor.cbor": encoded,
+		"descriptor.sig":  tampered,
+	})
 }

@@ -1,75 +1,46 @@
 package format
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
-// firmwarePolicyBytes is what the C implementation's cairn_policy_encode emits
-// for its compiled-in defaults, captured verbatim.
+// The committed policy vector is now the cross-implementation check, so this
+// file only guards the strictness rules.
 //
-// A cross-implementation check on real output rather than on a round trip
-// through this package alone: the point of a deterministic encoding is that two
-// implementations agree byte-for-byte, and only bytes from the other one can
-// demonstrate that.
-var firmwarePolicyBytes = []byte{
-	0xaf, 0x01, 0x01, 0x02, 0x19, 0x03, 0xe8, 0x03, 0x19, 0x03, 0xe8, 0x04,
-	0x19, 0x07, 0xd0, 0x05, 0x19, 0x75, 0x30, 0x06, 0x18, 0x96, 0x07, 0x18,
-	0x28, 0x08, 0x19, 0x0b, 0xb8, 0x09, 0x1a, 0x00, 0x01, 0xd4, 0xc0, 0x0a,
-	0x18, 0x78, 0x0b, 0x19, 0x01, 0x18, 0x0c, 0x19, 0xaf, 0xc8, 0x0d, 0x18,
-	0x80, 0x0e, 0x1a, 0x00, 0x10, 0x00, 0x00, 0x0f, 0x01,
-}
-
-func TestParsePolicySnapshotFromFirmwareBytes(t *testing.T) {
-	p, err := ParsePolicySnapshot(firmwarePolicyBytes)
-	if err != nil {
-		t.Fatalf("ParsePolicySnapshot on firmware output: %v", err)
-	}
-
-	for _, c := range []struct {
-		name string
-		got  uint64
-		want uint64
-	}{
-		{"PolicyVersion", uint64(p.PolicyVersion), 1},
-		{"GNSSPeriodMS", uint64(p.GNSSPeriodMS), 1000},
-		{"IMUWindowMS", uint64(p.IMUWindowMS), 1000},
-		{"OBDPeriodMS", uint64(p.OBDPeriodMS), 2000},
-		{"HealthPeriodMS", uint64(p.HealthPeriodMS), 30000},
-		{"StartScoreThresholdE2", uint64(p.StartScoreThresholdE2), 150},
-		{"StopScoreThresholdE2", uint64(p.StopScoreThresholdE2), 40},
-		{"StartDwellMS", uint64(p.StartDwellMS), 3000},
-		{"StopDwellMS", uint64(p.StopDwellMS), 120000},
-		{"MotionAccelRMSmg", uint64(p.MotionAccelRMSmg), 120},
-		{"MotionSpeedCMPS", uint64(p.MotionSpeedCMPS), 280},
-		{"PrerollWindowMS", uint64(p.PrerollWindowMS), 45000},
-		{"PrerollRingSamples", uint64(p.PrerollRingSamples), 128},
-		{"SegmentMaxBytes", uint64(p.SegmentMaxBytes), 1048576},
-	} {
-		if c.got != c.want {
-			t.Errorf("%s = %d, want %d", c.name, c.got, c.want)
-		}
-	}
-
-	if !p.AdaptiveSampling {
-		t.Error("AdaptiveSampling = false, want true")
-	}
-}
+// It used to carry a hex array captured from the C encoder. That was weaker
+// than it looked: a snapshot pasted into a test file is a claim about what the
+// other implementation did once, where a committed vector is an input both
+// implementations run. fixtures/format-v2/policy-snapshot/policy.cbor is that
+// input, and TestConformanceVectors checks this implementation against it.
 
 // Trailing bytes and unknown keys are both refused, because reporting a partial
 // policy as a complete one is worse than reporting none.
 func TestParsePolicySnapshotRejectsMalformed(t *testing.T) {
-	withTrailing := append(append([]byte{}, firmwarePolicyBytes...), 0x00)
+	raw, err := os.ReadFile(filepath.Join(vectorDir, "policy-snapshot", "policy.cbor"))
+	if err != nil {
+		t.Skipf("vectors not generated (%v); run: go run ./cmd/mkvectors -out ../fixtures/format-v2", err)
+	}
+
+	if _, err := ParsePolicySnapshot(raw); err != nil {
+		t.Fatalf("the committed vector should parse: %v", err)
+	}
+
+	withTrailing := append(append([]byte{}, raw...), 0x00)
 	if _, err := ParsePolicySnapshot(withTrailing); err == nil {
-		t.Error("trailing byte accepted")
+		t.Error("a trailing byte was accepted")
 	}
 
-	short := firmwarePolicyBytes[:len(firmwarePolicyBytes)-2]
-	if _, err := ParsePolicySnapshot(short); err == nil {
-		t.Error("truncated snapshot accepted")
+	if _, err := ParsePolicySnapshot(raw[:len(raw)-2]); err == nil {
+		t.Error("a truncated snapshot was accepted")
 	}
 
-	// Map claiming 15 fields but using key 99.
-	unknown := append([]byte{}, firmwarePolicyBytes...)
+	// The map still claims its full field count but uses a key this build does
+	// not define, which means the policy is only partly understood.
+	unknown := append([]byte{}, raw...)
 	unknown[1] = 99
 	if _, err := ParsePolicySnapshot(unknown); err == nil {
-		t.Error("unknown key accepted")
+		t.Error("an unknown key was accepted")
 	}
 }
