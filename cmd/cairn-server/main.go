@@ -55,26 +55,30 @@ func main() {
 		revoke     = flag.String("revoke", "", "revoke a device: hex device ID")
 		revokeWhy  = flag.String("revoke-reason", "revoked by operator", "reason recorded with -revoke")
 		list       = flag.Bool("list-devices", false, "list enrolled devices and exit")
+
+		printReceiptKey = flag.Bool("print-receipt-key", false,
+			"print the receipt-signing public key and exit (this is the value a device pins)")
 	)
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	if err := run(runConfig{
-		dataDir:      *dataDir,
-		addr:         *addr,
-		certFile:     *certFile,
-		keyFile:      *keyFile,
-		clientCAFile: *clientCAFile,
-		receiptKey:   *receiptKey,
-		dev:          *dev,
-		enroll:       *enroll,
-		enrollKey:    *enrollKey,
-		enrollName:   *enrollName,
-		revoke:       *revoke,
-		revokeWhy:    *revokeWhy,
-		list:         *list,
-		log:          log,
+		dataDir:         *dataDir,
+		addr:            *addr,
+		certFile:        *certFile,
+		keyFile:         *keyFile,
+		clientCAFile:    *clientCAFile,
+		receiptKey:      *receiptKey,
+		dev:             *dev,
+		enroll:          *enroll,
+		enrollKey:       *enrollKey,
+		enrollName:      *enrollName,
+		revoke:          *revoke,
+		revokeWhy:       *revokeWhy,
+		list:            *list,
+		printReceiptKey: *printReceiptKey,
+		log:             log,
 	}); err != nil {
 		log.Error("fatal", "error", err)
 		os.Exit(1)
@@ -96,6 +100,8 @@ type runConfig struct {
 	revoke     string
 	revokeWhy  string
 	list       bool
+
+	printReceiptKey bool
 
 	log *slog.Logger
 }
@@ -119,6 +125,9 @@ func run(cfg runConfig) error {
 		return revokeDevice(registry, cfg)
 	}
 
+	// Printing the receipt key is also administrative, but it needs the key
+	// store rather than the device registry, so it runs after that is opened.
+
 	store, err := cas.Open(filepath.Join(cfg.dataDir, "cas"))
 	if err != nil {
 		return fmt.Errorf("open raw store: %w", err)
@@ -136,6 +145,19 @@ func run(cfg runConfig) error {
 	})
 	if err != nil {
 		return fmt.Errorf("open receipt store: %w", err)
+	}
+
+	// A device pins this value and refuses to delete anything that is not
+	// signed by it, so an operator needs a way to read it that does not involve
+	// the server already running and reachable.
+	if cfg.printReceiptKey {
+		keyID := receiptStore.KeyID()
+		fmt.Println(receiptStore.PublicKeyHex())
+		fmt.Fprintf(os.Stderr, "key ID %s\n", hex.EncodeToString(keyID[:]))
+		fmt.Fprintf(os.Stderr,
+			"pin this in firmware/cairn-v2/include/secrets.h as "+
+				"CAIRN_SERVER_RECEIPT_KEY_HEX\n")
+		return nil
 	}
 
 	queue, err := outbox.Open(filepath.Join(cfg.dataDir, "outbox"))
