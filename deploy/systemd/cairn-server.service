@@ -1,0 +1,67 @@
+[Unit]
+# Cairn v2 ingest server.
+#
+# Replaces the `systemd-run --user` transient unit used during bring-up, which
+# did not survive a reboot. This one does, and it runs as a dedicated system
+# user rather than as a login account, because the directory it owns holds the
+# receipt-signing seed: that key is what authorizes a device to delete a trip
+# from its card, and losing it means reflashing firmware to re-pin a new one.
+Description=Cairn v2 ingest server
+Documentation=https://github.com/ParkWardRR/Cairn
+Documentation=file:/usr/share/doc/cairn/deploying.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cairn
+Group=cairn
+
+# Flags live in the environment file so switching transport does not mean
+# editing a unit. CAIRN_ARGS is deliberately unquoted: systemd word-splits a
+# bare $VAR, which is what lets one variable carry the whole flag list.
+EnvironmentFile=/etc/cairn/server.env
+ExecStart=/usr/local/bin/cairn-server $CAIRN_ARGS
+
+Restart=on-failure
+RestartSec=5s
+
+# Creates and owns /var/lib/cairn at 0700. The CAS, ledger, issued receipts and
+# the signing seed all live here.
+StateDirectory=cairn
+StateDirectoryMode=0700
+
+# An ingest service parses attacker-supplied bytes for a living — a bundle
+# arrives over the network and is scanned frame by frame — so the blast radius
+# of a parser bug is worth constraining even on a home LAN.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+
+# Inbound TCP only; no raw sockets, no unix-domain surprises.
+RestrictAddressFamilies=AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# ProtectSystem=strict makes everything read-only except StateDirectory, so the
+# certificate directory has to be granted explicitly — read-only, since the
+# service has no business rewriting its own key material.
+ReadOnlyPaths=/etc/cairn
+
+[Install]
+WantedBy=multi-user.target
