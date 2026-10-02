@@ -25,6 +25,19 @@ const (
 	sentinelI8  = -0x80 // 0x80 read as int8
 )
 
+// UnavailableU16 and UnavailableI8 report whether a field carries the
+// specification's "unavailable" sentinel rather than a measurement.
+//
+// Exported because DEVICE_HEALTH is parsed into plain integers rather than
+// pointers — the parser stays faithful to the bytes and leaves the semantics to
+// its caller — so every caller needs a way to ask. Without these the sentinel
+// travels onward as a number: 65535 mV of supply, or −128 °C, both of which
+// read as measurements and neither of which is one.
+func UnavailableU16(v uint16) bool { return v == sentinelU16 }
+
+// UnavailableI8 reports the int8 sentinel, used by temperature and RSSI.
+func UnavailableI8(v int8) bool { return v == sentinelI8 }
+
 // GNSSSample is a decoded position observation (§4.1).
 type GNSSSample struct {
 	LatE7 int32

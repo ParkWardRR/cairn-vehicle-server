@@ -675,20 +675,49 @@ func newStatus(manifest *format.Manifest, f *format.Frame, s *format.DeviceHealt
 		RebootCount: s.RebootCount,
 	}
 
-	bat := int32(s.BatteryMV)
-	st.BatteryMV = &bat
-	errs := int32(s.SDWriteErrors)
-	st.SDWriteErrors = &errs
-	free := int32(s.SDFreeMiB)
-	st.SDFreeMiB = &free
-	temp := int16(s.DeviceTempC)
-	st.DeviceTempC = &temp
-	rssi := int16(s.RSSIdBm)
-	st.RSSIdBm = &rssi
-	e1 := int32(s.ExtSensor1)
-	st.ExtSensor1 = &e1
-	e2 := int32(s.ExtSensor2)
-	st.ExtSensor2 = &e2
+	/*
+	 * Honour the unavailable sentinels rather than wrapping them in pointers.
+	 *
+	 * These fields are pointers precisely so that "absent" is representable,
+	 * and this function used to set every one of them unconditionally — so a
+	 * parked device with no ECU answering decoded to a supply of 65535 mV and a
+	 * temperature of −128 °C, values that look like measurements and are not.
+	 * ParseDeviceHealth is right to return the raw bytes; applying the
+	 * specification's meaning is this layer's job, and it was not doing it.
+	 *
+	 * It matters beyond tidiness because these land in the database and the web
+	 * UI, and because internal/power computes a battery drain rate from the
+	 * series — fed 65535 mV it would report a catastrophic discharge that never
+	 * happened.
+	 */
+	if !format.UnavailableU16(s.BatteryMV) {
+		bat := int32(s.BatteryMV)
+		st.BatteryMV = &bat
+	}
+	if !format.UnavailableU16(s.SDWriteErrors) {
+		errs := int32(s.SDWriteErrors)
+		st.SDWriteErrors = &errs
+	}
+	if !format.UnavailableU16(s.SDFreeMiB) {
+		free := int32(s.SDFreeMiB)
+		st.SDFreeMiB = &free
+	}
+	if !format.UnavailableI8(s.DeviceTempC) {
+		temp := int16(s.DeviceTempC)
+		st.DeviceTempC = &temp
+	}
+	if !format.UnavailableI8(s.RSSIdBm) {
+		rssi := int16(s.RSSIdBm)
+		st.RSSIdBm = &rssi
+	}
+	if !format.UnavailableU16(s.ExtSensor1) {
+		e1 := int32(s.ExtSensor1)
+		st.ExtSensor1 = &e1
+	}
+	if !format.UnavailableU16(s.ExtSensor2) {
+		e2 := int32(s.ExtSensor2)
+		st.ExtSensor2 = &e2
+	}
 
 	return st
 }

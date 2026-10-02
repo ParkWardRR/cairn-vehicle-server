@@ -30,8 +30,11 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/ParkWardRR/Cairn/server/format"
+	"github.com/ParkWardRR/Cairn/server/internal/decode"
+	"github.com/ParkWardRR/Cairn/server/internal/power"
 )
 
 func main() {
@@ -155,7 +158,13 @@ func discover(target string) ([]discoveredBundle, string, error) {
 	var out []discoveredBundle
 
 	// A card root, or the bundles/ directory itself.
-	for _, sub := range []string{"bundles", "capture", "."} {
+	//
+	// "cairn" is in the list because the device's own paths are /cairn/bundles
+	// and /cairn/capture, where / is the card root — so a card mounted at
+	// /Volumes/CARD puts everything under /Volumes/CARD/cairn. Pointing this
+	// tool at the mount point is the obvious thing to do and used to fail with
+	// "no bundles found", on a card that was in fact full of them.
+	for _, sub := range []string{"bundles", "capture", "cairn/bundles", "cairn/capture", "."} {
 		base := filepath.Join(target, sub)
 		entries, err := os.ReadDir(base)
 		if err != nil {
@@ -251,6 +260,16 @@ type bundleResult struct {
 	HealthRecords  int      `json:"health_records,omitempty"`
 	HealthDegraded int      `json:"health_records_degraded,omitempty"`
 
+	// Standby windows and the supply trend, recovered from the health-region
+	// transition pairs. The only view of parked power behaviour available
+	// without a meter.
+	StandbyWindows   int     `json:"standby_windows,omitempty"`
+	StandbyMS        uint64  `json:"standby_ms,omitempty"`
+	StandbyFraction  float64 `json:"standby_fraction,omitempty"`
+	StandbyUnmatched int     `json:"standby_unmatched,omitempty"`
+	VoltageSamples   int     `json:"voltage_samples,omitempty"`
+	DrainMVPerHour   float64 `json:"drain_mv_per_hour,omitempty"`
+
 	Checks   []string `json:"checks"`
 	Problems []string `json:"problems,omitempty"`
 	Notes    []string `json:"notes,omitempty"`
@@ -329,6 +348,7 @@ func verifyBundle(b discoveredBundle, opts options) bundleResult {
 			s := summarize(journal, sr)
 			res.JournalSegment = &s
 			collectHealth(&res, sr)
+			collectPower(&res, sr)
 		}
 	}
 
@@ -600,6 +620,78 @@ func collectEvents(res *bundleResult, sr *format.ScanResult) {
 	}
 }
 
+// collectPower recovers the standby windows and the supply-voltage trend.
+//
+// This is the only way to see parked power behaviour without a meter. The
+// firmware cannot measure its own current — there is no shunt on the board —
+// so what it records instead is the pair of health-region transitions around
+// each standby window plus the supply rail in DEVICE_HEALTH. A voltage series
+// on its own cannot tell six hours asleep from six hours awake, and those
+// differ by roughly an order of magnitude in draw; the windows are what make
+// the series attributable.
+//
+// Reported here rather than only in the server's decode pipeline because the
+// question "is this thing going to flatten the battery" is usually asked while
+// holding the card, before anything has been uploaded.
+func collectPower(res *bundleResult, sr *format.ScanResult) {
+	var transitions []decode.Transition
+	var statuses []decode.Status
+
+	for i := range sr.Frames {
+		f := &sr.Frames[i]
+
+		switch f.RecordType {
+		case format.RecordStateTransition:
+			t, err := format.ParseStateTransition(f.Payload)
+			if err != nil {
+				continue // collectHealth-style failures are reported there
+			}
+			transitions = append(transitions, decode.Transition{
+				Seq:          f.Seq,
+				MonotonicMS:  f.MonotonicMS,
+				Region:       t.Region,
+				FromState:    t.FromState,
+				ToState:      t.ToState,
+				TriggerEvent: t.TriggerEvent,
+				ReasonCode:   t.ReasonCode,
+			})
+
+		case format.RecordDeviceHealth:
+			h, err := format.ParseDeviceHealth(f.Payload)
+			if err != nil {
+				continue
+			}
+			st := decode.Status{Seq: f.Seq, MonotonicMS: f.MonotonicMS}
+			if !format.UnavailableU16(h.BatteryMV) {
+				mv := int32(h.BatteryMV)
+				st.BatteryMV = &mv
+			}
+			statuses = append(statuses, st)
+		}
+	}
+
+	s := power.Summarize(transitions, statuses)
+
+	res.StandbyWindows = len(s.Windows)
+	res.StandbyMS = s.StandbyMS
+	res.StandbyFraction = s.StandbyFraction
+	res.StandbyUnmatched = s.UnmatchedWindows
+	res.VoltageSamples = s.VoltageSamples
+	res.DrainMVPerHour = s.DrainMVPerHour
+
+	/*
+	 * An entry with no exit means the device lost power while asleep, or reset
+	 * instead of waking. Worth surfacing: it is the signature of a supply that
+	 * was cut, which on a vehicle is exactly what someone investigating a flat
+	 * battery wants to see.
+	 */
+	if s.UnmatchedWindows > 0 {
+		res.note("%d standby window(s) have no recorded wake, so the device "+
+			"lost power while asleep or reset instead of waking",
+			s.UnmatchedWindows)
+	}
+}
+
 // collectHealth unions the degraded conditions the device reported.
 //
 // This is the device's own account of what was wrong, and it is worth reading
@@ -785,6 +877,38 @@ func report(results []bundleResult, opts options) {
 				fmt.Printf("  health       %d of %d record(s) degraded: %s\n",
 					r.HealthDegraded, r.HealthRecords,
 					strings.Join(r.HealthStates, "|"))
+			}
+		}
+
+		/*
+		 * Parked power behaviour, which is otherwise invisible without a meter.
+		 * Standby windows come from the matched health-region transition pairs;
+		 * the drain rate is the supply trend across the observed span.
+		 *
+		 * Deliberately a rate in mV/h and not a current. A battery's
+		 * voltage-to-charge curve is non-linear and specific to the battery,
+		 * and on a vehicle the measured decay includes the car's own parasitic
+		 * draw — usually larger than a dongle's. Printing milliamps here would
+		 * be inventing precision.
+		 */
+		if r.StandbyWindows > 0 || r.VoltageSamples > 0 {
+			if r.StandbyWindows > 0 {
+				fmt.Printf("  power        %d standby window(s), %s asleep (%.0f%% of the span)",
+					r.StandbyWindows, time.Duration(r.StandbyMS)*time.Millisecond,
+					r.StandbyFraction*100)
+				if r.StandbyUnmatched > 0 {
+					fmt.Printf(", %d never woke", r.StandbyUnmatched)
+				}
+				fmt.Println()
+			} else {
+				fmt.Printf("  power        no standby recorded in this bundle\n")
+			}
+
+			if r.VoltageSamples >= 2 {
+				fmt.Printf("  supply       %d reading(s), trend %+.1f mV/h\n",
+					r.VoltageSamples, r.DrainMVPerHour)
+			} else if r.VoltageSamples == 1 {
+				fmt.Printf("  supply       1 reading, too few for a trend\n")
 			}
 		}
 
