@@ -160,10 +160,13 @@ curl --cacert ca.pem --cert client.crt --key client.key \
   -X POST https://cairn.alpina.casa:8443/api/v2/bundles/offer
 # → 400 missing X-Cairn-Signature
 
-# What the pipeline actually recorded. Takes the ledger directory
-# positionally — not -data, which it rejects.
-cairn-ledger -summary /var/lib/cairn/ledger
-cairn-ledger -problems /var/lib/cairn/ledger
+# What the pipeline actually recorded. Three things to get right at once:
+# the ledger directory is positional (-data is rejected), /var/lib/cairn is
+# 0700 cairn so it needs sudo, and sudo's secure_path excludes /usr/local/bin
+# so the binary needs its full path. Each of the three fails differently and
+# none of them says "permissions".
+sudo /usr/local/bin/cairn-ledger -summary  /var/lib/cairn/ledger
+sudo /usr/local/bin/cairn-ledger -problems /var/lib/cairn/ledger
 ```
 
 ## Building
