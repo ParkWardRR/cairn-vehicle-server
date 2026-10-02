@@ -52,7 +52,7 @@ func main() {
 				"the OTA endpoints entirely")
 
 		dev = flag.Bool("dev", false,
-			"development mode: permit plaintext HTTP and an ephemeral receipt key. Never use in production.")
+			"development mode: permit plaintext HTTP. Never use in production.")
 
 		enroll     = flag.String("enroll", "", "enrol a device: hex device ID (requires -enroll-key)")
 		enrollKey  = flag.String("enroll-key", "", "hex Ed25519 public key for -enroll")
@@ -113,6 +113,26 @@ type runConfig struct {
 	log *slog.Logger
 }
 
+// resolveReceiptKeyPath decides which Ed25519 seed signs receipts.
+//
+// Deliberately independent of dev mode. An earlier version skipped the data
+// directory default under -dev, so a directory holding a perfectly good
+// receipt.seed was ignored and receipts.Open minted an ephemeral key instead.
+// The resulting failure is remote from its cause: -print-receipt-key reports the
+// persistent key, an operator pins it in firmware, and then every receipt the
+// running server issues carries a different key, so the device rejects all of
+// them and never prunes — with both sides behaving exactly as written.
+//
+// Dev mode's job is to relax the transport, not to rotate the trust anchor. An
+// ephemeral key remains reachable by pointing -receipt-key somewhere under
+// /tmp, which at least states the intent.
+func resolveReceiptKeyPath(explicit, dataDir string) string {
+	if explicit != "" {
+		return explicit
+	}
+	return filepath.Join(dataDir, "keys", "receipt.seed")
+}
+
 func run(cfg runConfig) error {
 	registryPath := filepath.Join(cfg.dataDir, "devices.json")
 
@@ -140,10 +160,7 @@ func run(cfg runConfig) error {
 		return fmt.Errorf("open raw store: %w", err)
 	}
 
-	receiptKeyPath := cfg.receiptKey
-	if receiptKeyPath == "" && !cfg.dev {
-		receiptKeyPath = filepath.Join(cfg.dataDir, "keys", "receipt.seed")
-	}
+	receiptKeyPath := resolveReceiptKeyPath(cfg.receiptKey, cfg.dataDir)
 
 	receiptStore, err := receipts.Open(receipts.Config{
 		Dir:     filepath.Join(cfg.dataDir, "receipts"),
