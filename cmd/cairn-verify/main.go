@@ -347,6 +347,31 @@ func verifyBundle(b discoveredBundle, opts options) bundleResult {
 		} else {
 			s := summarize(journal, sr)
 			res.JournalSegment = &s
+
+			/*
+			 * Count the journal's records too.
+			 *
+			 * This was omitted, so every record type that lives only in the
+			 * journal — DEVICE_HEALTH and STATE_TRANSITION — compared as zero
+			 * against the manifest, and this tool reported FAILED on bundles
+			 * that were cryptographically perfect. For a verifier whose entire
+			 * job is telling you whether a trip can be trusted, crying wolf is
+			 * close to the worst possible defect.
+			 *
+			 * It also hid a real one. Because every bundle failed these two
+			 * checks, a genuine firmware undercount on resumed captures was
+			 * indistinguishable from the noise; it only became visible on a
+			 * bundle where the manifest happened to match the journal exactly,
+			 * which proved the manifest was right and the tool was wrong.
+			 *
+			 * The manifest counts the whole bundle, both chains — confirmed by
+			 * a bundle whose capture segment held no health records at all and
+			 * whose manifest still counted ten of them.
+			 */
+			for rt, n := range sr.RecordCounts {
+				scannedCounts[rt] += n
+			}
+
 			collectHealth(&res, sr)
 			collectPower(&res, sr)
 		}
