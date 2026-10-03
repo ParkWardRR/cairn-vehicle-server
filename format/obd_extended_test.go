@@ -14,7 +14,7 @@ func TestOBDExtendedRoundTrip(t *testing.T) {
 	binary.LittleEndian.PutUint16(p[0:], 230)  // MAP kPa absolute
 	binary.LittleEndian.PutUint16(p[2:], 4500) // 45.00 g/s
 	binary.LittleEndian.PutUint16(p[4:], 8800) // lambda 0.88, rich under load as expected
-	binary.LittleEndian.PutUint16(p[6:], 1420) // 142.0% absolute load
+	binary.LittleEndian.PutUint16(p[6:], 362)  // 142.0% absolute load
 	p[8] = 101                                 // barometric
 	p[9] = byte(int8(24))                      // ambient
 	p[10] = byte(uint8(0xFD))                  // -3 as int8
@@ -50,9 +50,41 @@ func TestOBDExtendedRoundTrip(t *testing.T) {
 	if o.FuelTrimShortPct == nil || *o.FuelTrimShortPct != -3 {
 		t.Error("negative short fuel trim did not survive")
 	}
-	if o.AbsLoadPctE1 == nil || *o.AbsLoadPctE1 != 1420 {
-		t.Error("absolute load above 100% did not survive, which is the whole " +
-			"reason it is scaled rather than a percentage byte")
+	// Raw 362 is 362 * 100 / 255 ≈ 142%, the sort of absolute load a
+	// turbocharged engine reaches under boost — and the value the library's
+	// one-byte path would have reported as about 5%.
+	if o.AbsLoadRaw == nil || *o.AbsLoadRaw != 362 {
+		t.Error("the raw absolute-load pair did not survive")
+	}
+	if pct, ok := o.AbsoluteLoadPct(); !ok || pct < 141.9 || pct > 142.1 {
+		t.Errorf("absolute load = %.1f%% (ok=%v), want about 142 — values above "+
+			"100 are normal under boost and must not be clamped", pct, ok)
+	}
+}
+
+// PID 0x0B is one byte, so it hard-stops at 255 kPa absolute — roughly 22.3 psi
+// of gauge boost. That ceiling sits inside the range a tuned car operates in,
+// and the log shows a flat plateau rather than a rollover, which reads exactly
+// like a boost controller holding steady. Saying so is the difference between
+// "my tune is flat-lining" and "my logger is".
+func TestMAPSaturationIsFlagged(t *testing.T) {
+	p := make([]byte, 24)
+	binary.LittleEndian.PutUint16(p[0:], 255)
+	p[8] = 101
+
+	o, err := ParseOBDExtended(p)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !o.MAPSaturated() {
+		t.Error("255 kPa was not flagged as saturated")
+	}
+
+	// A stock-ish peak must not be flagged.
+	binary.LittleEndian.PutUint16(p[0:], 221)
+	o, _ = ParseOBDExtended(p)
+	if o.MAPSaturated() {
+		t.Error("221 kPa was flagged as saturated; that is a real reading")
 	}
 }
 
@@ -76,7 +108,7 @@ func TestOBDExtendedSentinelsAreAbsent(t *testing.T) {
 	}
 
 	if o.MAPkPa != nil || o.BaroKPa != nil || o.LambdaE4 != nil ||
-		o.MAFcgps != nil || o.AbsLoadPctE1 != nil ||
+		o.MAFcgps != nil || o.AbsLoadRaw != nil ||
 		o.AmbientTempC != nil || o.FuelTrimShortPct != nil ||
 		o.FuelTrimLongPct != nil {
 		t.Error("a sentinel decoded to a value; an unanswered PID must be absent")

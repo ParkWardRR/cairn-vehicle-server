@@ -766,7 +766,7 @@ type Boost struct {
 	BaroKPa          *uint8
 	MAFcgps          *uint16
 	LambdaE4         *uint16
-	AbsLoadPctE1     *uint16
+	AbsLoadRaw       *uint16
 	AmbientTempC     *int8
 	FuelTrimShortPct *int8
 	FuelTrimLongPct  *int8
@@ -790,7 +790,7 @@ func newBoost(manifest *format.Manifest, f *format.Frame, o *format.OBDExtended)
 		BaroKPa:          o.BaroKPa,
 		MAFcgps:          o.MAFcgps,
 		LambdaE4:         o.LambdaE4,
-		AbsLoadPctE1:     o.AbsLoadPctE1,
+		AbsLoadRaw:       o.AbsLoadRaw,
 		AmbientTempC:     o.AmbientTempC,
 		FuelTrimShortPct: o.FuelTrimShortPct,
 		FuelTrimLongPct:  o.FuelTrimLongPct,

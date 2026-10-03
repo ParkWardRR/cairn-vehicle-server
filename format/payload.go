@@ -563,9 +563,10 @@ type OBDExtended struct {
 	// stoichiometric; below is rich. Independent of the fuel's actual
 	// stoichiometric ratio, which is what makes it the right mixture signal.
 	LambdaE4 *uint16
-	// AbsLoadPctE1 is absolute engine load times ten, PID 0x43. Scaled rather
-	// than clamped because it legitimately exceeds 100% under boost.
-	AbsLoadPctE1 *uint16
+	// AbsLoadRaw is the raw 16-bit pair from PID 0x43. Percent is
+	// raw * 100 / 255 — see AbsoluteLoadPct — which spans the standard's full
+	// 0..25700% range rather than the 0..100 a one-byte read would give.
+	AbsLoadRaw *uint16
 
 	BaroKPa          *uint8
 	AmbientTempC     *int8
@@ -626,7 +627,7 @@ func ParseOBDExtended(p []byte) (*OBDExtended, error) {
 		o.LambdaE4 = &v
 	}
 	if v := binary.LittleEndian.Uint16(p[6:8]); v != sentinelU16 {
-		o.AbsLoadPctE1 = &v
+		o.AbsLoadRaw = &v
 	}
 	if v := p[8]; v != sentinelU8 {
 		o.BaroKPa = &v
@@ -646,4 +647,35 @@ func ParseOBDExtended(p []byte) (*OBDExtended, error) {
 	o.PollCadenceMS = binary.LittleEndian.Uint16(p[20:22])
 
 	return &o, nil
+}
+
+// AbsoluteLoadPct converts the raw PID 0x43 pair to a percentage, and reports
+// whether it was present.
+//
+// The standard formula is ((A*256)+B) * 100 / 255, which reaches 25700%. Values
+// above 100% are normal on a turbocharged engine — one reference puts an N20
+// near 190% under full boost — so a reader must not treat anything over 100 as
+// corrupt.
+func (o *OBDExtended) AbsoluteLoadPct() (float64, bool) {
+	if o.AbsLoadRaw == nil {
+		return 0, false
+	}
+	return float64(*o.AbsLoadRaw) * 100.0 / 255.0, true
+}
+
+// MAPSaturated reports whether manifold pressure is pinned at the top of PID
+// 0x0B's one-byte range.
+//
+// 0x0B is a single byte, so it hard-stops at 255 kPa absolute — roughly 22.3
+// psi of gauge boost at sea level. That ceiling falls inside the range a tuned
+// car operates in: a stock N20 peaks near 221 kPa, a Stage 2 tune around 253,
+// and some maps target 260 and above. Past the limit the log shows a flat
+// plateau at exactly 255 rather than a rollover, which reads like a boost
+// controller holding steady instead of an instrument running out of scale.
+//
+// Saying so explicitly is the difference between "my tune is flat-lining" and
+// "my logger is". PID 0x4F byte D declares the vehicle's own IMAP maximum and
+// is the standard way to learn the real ceiling.
+func (o *OBDExtended) MAPSaturated() bool {
+	return o.MAPkPa != nil && *o.MAPkPa >= 255
 }
