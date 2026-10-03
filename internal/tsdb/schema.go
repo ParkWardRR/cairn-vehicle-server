@@ -122,7 +122,8 @@ SELECT
     (o.mono_ms - p.mono_ms) AS gnss_age_ms
 FROM obd o
 ASOF LEFT JOIN boost b    ON o.boot_id = b.boot_id AND o.mono_ms >= b.mono_ms
-ASOF LEFT JOIN position p ON o.boot_id = p.boot_id AND o.mono_ms >= p.mono_ms;
+ASOF LEFT JOIN position p ON o.boot_id = p.boot_id AND o.mono_ms >= p.mono_ms
+    AND coalesce(p.source_flags, 0) & 32 = 0;
 
 CREATE VIEW v_reproducibility AS
 SELECT content_root, origin, decoder_ver, output_digest, reproduced,
@@ -141,8 +142,9 @@ WITH drive AS (
 ),
 gnss AS (
     SELECT boot_id,
-           count(*) AS gnss_samples,
-           count(*) FILTER (WHERE fix_type > 0) AS fix_samples
+           count(*) FILTER (WHERE coalesce(source_flags, 0) & 32 = 0) AS gnss_samples,
+           count(*) FILTER (WHERE coalesce(source_flags, 0) & 32 = 0 AND fix_type > 0) AS fix_samples,
+           count(*) FILTER (WHERE coalesce(source_flags, 0) & 32 != 0) AS phone_samples
     FROM position GROUP BY boot_id
 ),
 gaps AS (
@@ -159,6 +161,7 @@ warns AS (
 SELECT d.boot_id, d.duration_s, d.max_speed_kph, d.max_rpm, d.obd_samples,
        coalesce(g.gnss_samples, 0) AS gnss_samples,
        coalesce(g.fix_samples, 0) AS fix_samples,
+       coalesce(g.phone_samples, 0) AS phone_samples,
        coalesce(gp.gap_count, 0) AS gap_count,
        coalesce(gp.gap_duration_ms, 0) AS gap_duration_ms,
        w.warnings
@@ -268,8 +271,27 @@ SELECT
     o.mono_ms - p.mono_ms AS gnss_age_ms
 FROM obd o
 ASOF JOIN position p ON o.boot_id = p.boot_id AND o.mono_ms >= p.mono_ms
+    AND coalesce(p.source_flags, 0) & 32 = 0
 WHERE o.speed_kph IS NOT NULL
   AND p.speed_mps IS NOT NULL
   AND p.fix_type > 0
   AND (o.mono_ms - p.mono_ms) < 5000;
+
+-- Internal vs phone GNSS comparison. Joined by measurement time within a 500 ms
+-- window; reports per-boot disagreement. Works only when both sources are present.
+CREATE VIEW v_gnss_sources AS
+SELECT
+    i.boot_id, i.mono_ms,
+    i.lat AS internal_lat, i.lon AS internal_lon, i.fix_type AS internal_fix,
+    i.h_acc_m AS internal_hacc, i.speed_mps AS internal_speed,
+    p.lat AS phone_lat, p.lon AS phone_lon, p.fix_type AS phone_fix,
+    p.h_acc_m AS phone_hacc, p.speed_mps AS phone_speed,
+    ABS(i.mono_ms - p.mono_ms) AS time_offset_ms
+FROM position i
+ASOF JOIN position p ON i.boot_id = p.boot_id AND i.mono_ms >= p.mono_ms
+    AND coalesce(p.source_flags, 0) & 32 != 0
+WHERE coalesce(i.source_flags, 0) & 32 = 0
+  AND i.fix_type > 0
+  AND p.fix_type > 0
+  AND ABS(i.mono_ms - p.mono_ms) < 500;
 `
