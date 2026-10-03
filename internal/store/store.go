@@ -278,7 +278,7 @@ func (s *Store) SaveDecode(ctx context.Context, res *decode.Result) error {
 	// unprovisioned month lands in its own partition rather than the default.
 	for _, t := range resultMonths(res) {
 		for _, parent := range []string{
-			"norm.position_samples", "norm.imu_samples", "norm.obd_samples",
+			"norm.position_samples", "norm.imu_samples", "norm.obd_samples", "norm.boost_samples",
 		} {
 			if _, err := tx.Exec(ctx,
 				`SELECT norm.ensure_month_partition($1::regclass, $2)`, parent, t); err != nil {
@@ -295,6 +295,7 @@ func (s *Store) SaveDecode(ctx context.Context, res *decode.Result) error {
 		`DELETE FROM norm.position_samples WHERE content_root = $1`,
 		`DELETE FROM norm.imu_samples WHERE content_root = $1`,
 		`DELETE FROM norm.obd_samples WHERE content_root = $1`,
+		`DELETE FROM norm.boost_samples WHERE content_root = $1`,
 		`DELETE FROM norm.device_status WHERE content_root = $1`,
 		`DELETE FROM norm.state_transitions WHERE content_root = $1`,
 	} {
@@ -310,6 +311,9 @@ func (s *Store) SaveDecode(ctx context.Context, res *decode.Result) error {
 		return err
 	}
 	if err := insertOBD(ctx, tx, res); err != nil {
+		return err
+	}
+	if err := insertBoost(ctx, tx, res); err != nil {
 		return err
 	}
 	if err := insertStatus(ctx, tx, res); err != nil {
@@ -339,15 +343,16 @@ func (s *Store) SaveDecode(ctx context.Context, res *decode.Result) error {
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO derived.decode_runs (
 			content_root, decoder_version, decoded_at, duration_ms,
-			position_samples, imu_samples, obd_samples, status_samples,
+			position_samples, imu_samples, obd_samples, boost_samples, status_samples,
 			transitions, gaps, events, unknown_records, warnings, output_digest
-		) VALUES ($1,$2,now(),$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+		) VALUES ($1,$2,now(),$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
 		ON CONFLICT (content_root, decoder_version) DO UPDATE SET
 			decoded_at       = now(),
 			duration_ms      = EXCLUDED.duration_ms,
 			position_samples = EXCLUDED.position_samples,
 			imu_samples      = EXCLUDED.imu_samples,
 			obd_samples      = EXCLUDED.obd_samples,
+			boost_samples    = EXCLUDED.boost_samples,
 			status_samples   = EXCLUDED.status_samples,
 			transitions      = EXCLUDED.transitions,
 			gaps             = EXCLUDED.gaps,
@@ -357,7 +362,7 @@ func (s *Store) SaveDecode(ctx context.Context, res *decode.Result) error {
 			output_digest    = EXCLUDED.output_digest
 	`,
 		root, decode.Version, res.DurationMS,
-		len(res.Positions), len(res.IMU), len(res.OBD), len(res.Status),
+		len(res.Positions), len(res.IMU), len(res.OBD), len(res.Boost), len(res.Status),
 		len(res.Transitions), len(res.Gaps), len(res.Events),
 		res.UnknownRecords, warnings, digest[:],
 	); err != nil {

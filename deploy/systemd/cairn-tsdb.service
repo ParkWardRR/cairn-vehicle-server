@@ -18,13 +18,27 @@ User=cairn
 Group=cairn
 
 # Loopback by default: the data includes GNSS positions, and the endpoint takes
-# caller-supplied SQL. Reach it with `ssh -L 8480:127.0.0.1:8480 <host>`.
+# caller-supplied SQL. To bind to a non-loopback address, TLS must be configured
+# — the binary refuses to listen on a routable address without it.
+#
+# Loopback (plain HTTP, ssh tunnel required):
 ExecStart=/usr/local/bin/cairn-tsdb \
     -data /var/lib/cairn \
     -sd /var/lib/cairn-tsdb/sd \
     -addr 127.0.0.1:8480 \
     -memory 2GB \
     -watch 5s
+#
+# mTLS (reuses the ingest server's private CA and certs):
+# ExecStart=/usr/local/bin/cairn-tsdb \
+#     -data /var/lib/cairn \
+#     -sd /var/lib/cairn-tsdb/sd \
+#     -addr :8480 \
+#     -tls-cert /etc/cairn/certs/server.pem \
+#     -tls-key /etc/cairn/certs/server-key.pem \
+#     -tls-client-ca /etc/cairn/certs/ca.pem \
+#     -memory 2GB \
+#     -watch 5s
 
 Restart=on-failure
 RestartSec=5s
@@ -58,10 +72,8 @@ RemoveIPC=yes
 RestrictAddressFamilies=AF_INET AF_INET6
 SystemCallArchitectures=native
 
-# The server's data directory is read, never written. The CAS is copied out
-# through a private scratch store precisely so this process never opens it for
-# write.
-ReadOnlyPaths=/var/lib/cairn
+# The server's data directory and certificate store are read, never written.
+ReadOnlyPaths=/var/lib/cairn /etc/cairn
 
 [Install]
 WantedBy=multi-user.target

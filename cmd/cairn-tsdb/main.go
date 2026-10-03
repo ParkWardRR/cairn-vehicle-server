@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -34,6 +35,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ParkWardRR/Cairn/server/internal/mtls"
 	"github.com/ParkWardRR/Cairn/server/internal/tsdb"
 )
 
@@ -49,6 +51,10 @@ func main() {
 		query  = flag.String("query", "", "run one read-only statement against the built store, print JSON and exit")
 		serve  = flag.Bool("serve-unreproduced", false, "serve even when the build did not reproduce cleanly")
 		watch  = flag.Duration("watch", 0, "poll the sources this often and rebuild when a receipt or card bundle appears (0 disables)")
+
+		certFile     = flag.String("tls-cert", "", "server certificate (PEM)")
+		keyFile      = flag.String("tls-key", "", "server private key (PEM)")
+		clientCAFile = flag.String("tls-client-ca", "", "private CA that clients must chain to")
 	)
 	flag.StringVar(&cfg.dataDir, "data", "", "cairn-server data directory (committed bundles); optional")
 	flag.StringVar(&cfg.sdRoot, "sd", "", "SD card cairn/ directory (sealed v2 bundles); optional")
@@ -96,6 +102,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	tlsConfigured := *certFile != "" && *keyFile != ""
+	if !tlsConfigured && !isLoopback(*addr) {
+		fmt.Fprintln(os.Stderr, "cairn-tsdb: a non-loopback address requires TLS (pass -tls-cert and -tls-key)")
+		os.Exit(2)
+	}
+
 	s := &server{cfg: cfg, log: log, allowUnreproduced: *serve}
 	s.cur.Store(db)
 
@@ -111,6 +123,26 @@ func main() {
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+
+	if tlsConfigured {
+		mtlsCfg := mtls.Config{
+			CertFile:     *certFile,
+			KeyFile:      *keyFile,
+			ClientCAFile: *clientCAFile,
+		}
+		tlsCfg, err := mtls.ServerConfig(mtlsCfg)
+		if err != nil {
+			log.Error("TLS setup failed", "error", err)
+			os.Exit(1)
+		}
+		srv.TLSConfig = tlsCfg
+
+		if !mtls.RequiresClientAuth(mtlsCfg) {
+			log.Warn("TLS is enabled without client authentication; " +
+				"pass -tls-client-ca so clients must present a certificate")
+		}
+	}
+
 	if *watch > 0 {
 		go s.watch(ctx, *watch)
 	}
@@ -121,8 +153,16 @@ func main() {
 		srv.Shutdown(shutdown)
 	}()
 
-	log.Info("serving", "addr", *addr, "bundles", len(db.Report.Bundles), "build_ms", db.Report.BuildMS)
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	log.Info("serving", "addr", *addr, "tls", tlsConfigured,
+		"client_auth", mtls.RequiresClientAuth(mtls.Config{ClientCAFile: *clientCAFile}),
+		"bundles", len(db.Report.Bundles), "build_ms", db.Report.BuildMS)
+
+	if tlsConfigured {
+		err = srv.ListenAndServeTLS("", "")
+	} else {
+		err = srv.ListenAndServe()
+	}
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Error("listen", "error", err)
 		os.Exit(1)
 	}
@@ -239,4 +279,16 @@ func printJSON(w io.Writer, v any) {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	enc.Encode(v)
+}
+
+func isLoopback(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "" || host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

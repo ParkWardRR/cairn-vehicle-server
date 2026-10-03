@@ -22,6 +22,7 @@ import (
 	"github.com/ParkWardRR/Cairn/server/internal/receipts"
 	"github.com/ParkWardRR/Cairn/server/internal/store"
 	"github.com/ParkWardRR/Cairn/server/internal/testbundle"
+	"github.com/ParkWardRR/Cairn/server/internal/tsdb"
 	"github.com/ParkWardRR/Cairn/server/internal/worker"
 )
 
@@ -155,6 +156,7 @@ func (e *env) cleanup(t *testing.T, contentRoot [32]byte) {
 		`DELETE FROM norm.position_samples WHERE content_root = $1`,
 		`DELETE FROM norm.imu_samples WHERE content_root = $1`,
 		`DELETE FROM norm.obd_samples WHERE content_root = $1`,
+		`DELETE FROM norm.boost_samples WHERE content_root = $1`,
 		`DELETE FROM norm.device_status WHERE content_root = $1`,
 		`DELETE FROM norm.state_transitions WHERE content_root = $1`,
 		`DELETE FROM raw.bundle_chunks WHERE content_root = $1`,
@@ -373,7 +375,7 @@ func TestReDecodeIsIdempotent(t *testing.T) {
 		out := map[string]int{}
 		for _, table := range []string{
 			"norm.position_samples", "norm.imu_samples", "norm.obd_samples",
-			"norm.device_status", "norm.state_transitions",
+			"norm.boost_samples", "norm.device_status", "norm.state_transitions",
 			"derived.trips", "derived.events", "derived.gaps",
 		} {
 			n, err := e.db.CountRows(ctx, table, root)
@@ -902,5 +904,75 @@ func TestBundleIDConflictIsReported(t *testing.T) {
 	}
 	if !errors.Is(err, store.ErrBundleIDConflict) {
 		t.Fatalf("error = %v, want store.ErrBundleIDConflict", err)
+	}
+}
+
+// ─── parity ────────────────────────────────────────────────────────────────
+
+// Property: decoding the same bundle into PostgreSQL and DuckDB produces
+// identical row counts per table. This is the parity assertion the roadmap
+// calls for — one bundle set, two stores, same numbers.
+func TestParityWithDuckDB(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+
+	b, err := testbundle.Build(testbundle.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { e.cleanup(t, b.Manifest.ContentRoot) })
+
+	e.syncBundle(t, b)
+	if _, err := e.worker.DrainOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	root := b.Manifest.ContentRoot
+
+	// Build the same bundle into DuckDB via the analytical store path.
+	snap, _, err := tsdb.SnapshotSources("", e.root, "")
+	if err != nil {
+		t.Fatalf("snapshot sources: %v", err)
+	}
+	defer snap.Close()
+
+	db, err := tsdb.Build(ctx, snap, nil, tsdb.Options{MemoryLimit: "256MB"})
+	if err != nil {
+		t.Fatalf("duckdb build: %v", err)
+	}
+	defer db.Close()
+
+	if len(db.Report.Bundles) != 1 {
+		t.Fatalf("duckdb loaded %d bundles, want 1", len(db.Report.Bundles))
+	}
+	if !db.Report.OK() {
+		t.Fatalf("duckdb build did not reproduce: %v", db.Report.Problems)
+	}
+
+	duck := db.Report.Bundles[0].Rows
+
+	type pair struct {
+		table string
+		duck  uint32
+	}
+	tables := []pair{
+		{"norm.position_samples", duck.Position},
+		{"norm.imu_samples", duck.IMU},
+		{"norm.obd_samples", duck.OBD},
+		{"norm.boost_samples", duck.Boost},
+		{"norm.device_status", duck.Status},
+		{"norm.state_transitions", duck.Transition},
+		{"derived.gaps", duck.Gap},
+	}
+
+	for _, p := range tables {
+		pg, err := e.db.CountRows(ctx, p.table, root)
+		if err != nil {
+			t.Fatalf("count %s: %v", p.table, err)
+		}
+		if uint32(pg) != p.duck {
+			t.Errorf("%s: PostgreSQL has %d rows, DuckDB has %d — the two stores disagree",
+				p.table, pg, p.duck)
+		}
 	}
 }

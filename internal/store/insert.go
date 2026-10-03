@@ -37,6 +37,9 @@ func resultMonths(res *decode.Result) []time.Time {
 	for i := range res.OBD {
 		add(res.OBD[i].ObservedAt)
 	}
+	for i := range res.Boost {
+		add(res.Boost[i].ObservedAt)
+	}
 
 	out := make([]time.Time, 0, len(seen))
 	for m := range seen {
@@ -130,6 +133,35 @@ func insertOBD(ctx context.Context, tx pgx.Tx, res *decode.Result) error {
 		"coolant_temp_c", "intake_temp_c", "fuel_pressure_kpa", "timing_advance_deg",
 		"pid_error_count", "pids_requested", "pids_answered",
 		"poll_cadence_ms", "frame_flags",
+	}, rows)
+}
+
+func insertBoost(ctx context.Context, tx pgx.Tx, res *decode.Result) error {
+	if len(res.Boost) == 0 {
+		return nil
+	}
+
+	rows := make([][]any, 0, len(res.Boost))
+	for i := range res.Boost {
+		b := &res.Boost[i]
+		rows = append(rows, []any{
+			b.ObservedAt, res.ContentRoot[:], int64(b.Seq),
+			res.DeviceID[:], res.BootID[:], int64(b.MonotonicMS),
+			b.MAPkPa, b.BaroKPa, b.MAFcgps,
+			b.LambdaE4, b.AbsLoadRaw, b.AmbientTempC,
+			b.FuelTrimShortPct, b.FuelTrimLongPct,
+			b.BoostPSI, b.Lambda,
+			int64(b.PIDsRequested), int64(b.PIDsAnswered), b.PollCadenceMS,
+		})
+	}
+
+	return copyInto(ctx, tx, "norm", "boost_samples", []string{
+		"observed_at", "content_root", "seq", "device_id", "boot_id",
+		"monotonic_ms", "map_kpa", "baro_kpa", "maf_cgps",
+		"lambda_e4", "abs_load_raw", "ambient_temp_c",
+		"stft_pct", "ltft_pct",
+		"boost_psi", "lambda_ratio",
+		"pids_requested", "pids_answered", "poll_cadence_ms",
 	}, rows)
 }
 
