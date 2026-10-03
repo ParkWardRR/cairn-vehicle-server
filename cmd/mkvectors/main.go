@@ -62,6 +62,7 @@ type expectation struct {
 	Events   *eventsExpectation     `json:"events,omitempty"`
 	Health   *healthExpectation     `json:"health,omitempty"`
 	Update   *updateExpectation     `json:"update,omitempty"`
+	OBDExt   *obdExtExpectation     `json:"obd_ext,omitempty"`
 }
 
 type scanExpectation struct {
@@ -135,6 +136,29 @@ type merkleExpectation struct {
 	Note    string   `json:"note"`
 }
 
+type expectedOBDExt struct {
+	MAPkPa           *uint16  `json:"map_kpa"`
+	MAFcgps          *uint16  `json:"maf_cgps"`
+	LambdaE4         *uint16  `json:"lambda_e4"`
+	AbsLoadRaw       *uint16  `json:"abs_load_raw"`
+	BaroKPa          *uint8   `json:"baro_kpa"`
+	AmbientTempC     *int8    `json:"ambient_temp_c"`
+	FuelTrimShortPct *int8    `json:"fuel_trim_short_pct"`
+	FuelTrimLongPct  *int8    `json:"fuel_trim_long_pct"`
+	PIDsRequested    uint32   `json:"pids_requested"`
+	PIDsAnswered     uint32   `json:"pids_answered"`
+	PollCadenceMS    uint16   `json:"poll_cadence_ms"`
+	MAPSaturated     bool     `json:"map_saturated"`
+	BoostPSI         *float64 `json:"boost_psi,omitempty"`
+	Lambda           *float64 `json:"lambda,omitempty"`
+	AbsLoadPct       *float64 `json:"abs_load_pct,omitempty"`
+}
+
+type obdExtExpectation struct {
+	Records []expectedOBDExt `json:"records"`
+	Note    string           `json:"note"`
+}
+
 func main() {
 	out := flag.String("out", "../fixtures/format-v2", "output directory for the vectors")
 	flag.Parse()
@@ -176,6 +200,7 @@ func run(outDir string) error {
 		vectorPolicySnapshot,
 		vectorTripEventTypes,
 		vectorHealthBitmap,
+		vectorOBDExtended,
 		vectorUpdateDescriptorValid,
 		vectorUpdateDescriptorBadSignature,
 	}
@@ -304,6 +329,7 @@ func vectorValidMinimal(dir string, _, _ ed25519.PrivateKey) error {
 		format.RecordGNSSSample, format.RecordIMUSummary, format.RecordIMURawWindow,
 		format.RecordOBDSnapshot, format.RecordDeviceHealth, format.RecordTripEvent,
 		format.RecordStateTransition, format.RecordGNSSGap, format.RecordPolicySnapshot,
+		format.RecordOBDExtended,
 	}
 	for i, rt := range types {
 		if err := w.Append(rt, 1, 0, uint32(i*100), make([]byte, 16)); err != nil {
@@ -1138,6 +1164,107 @@ func vectorHealthBitmap(dir string, _, _ ed25519.PrivateKey) error {
 		Health: &healthExpectation{
 			Records: expected,
 			Note:    "0x00 means no condition on the list is active, which is not the same as healthy in every respect.",
+		},
+	}, segmentFiles(w.Bytes()))
+}
+
+// ── OBD_EXTENDED ────────────────────────────────────────────────────────────
+
+func obdExtPayload(mapKpa, mafCgps, lambdaE4, absLoadRaw uint16,
+	baroKpa uint8, ambientC, stftPct, ltftPct int8,
+	requested, answered uint32, cadence uint16) []byte {
+	p := make([]byte, 24)
+	binary.LittleEndian.PutUint16(p[0:], mapKpa)
+	binary.LittleEndian.PutUint16(p[2:], mafCgps)
+	binary.LittleEndian.PutUint16(p[4:], lambdaE4)
+	binary.LittleEndian.PutUint16(p[6:], absLoadRaw)
+	p[8] = baroKpa
+	p[9] = uint8(ambientC)
+	p[10] = uint8(stftPct)
+	p[11] = uint8(ltftPct)
+	binary.LittleEndian.PutUint32(p[12:], requested)
+	binary.LittleEndian.PutUint32(p[16:], answered)
+	binary.LittleEndian.PutUint16(p[20:], cadence)
+	return p
+}
+
+func ptrU16(v uint16) *uint16  { return &v }
+func ptrU8(v uint8) *uint8    { return &v }
+func ptrI8(v int8) *int8      { return &v }
+func ptrF64(v float64) *float64 { return &v }
+
+func vectorOBDExtended(dir string, _, _ ed25519.PrivateKey) error {
+	w := format.NewSegmentWriter(testHeader(0), format.ScanState{})
+
+	// Record 0: full boost scenario.
+	// MAP 230 kPa, baro 101 kPa → 129 kPa gauge → 18.71 psi.
+	// Lambda 0.88 → raw = 0.88 * 32768 = 28835.84 → 28836.
+	// Abs load 190% → raw = 190 * 255 / 100 = 484 (truncated; 484*100/255=189.8%).
+	// STFT -5%, LTFT +18%, ambient 28 C, MAF 15000 cgps.
+	p0 := obdExtPayload(230, 15000, 28836, 484, 101, 28, -5, 18, 6, 6, 200)
+	if err := w.Append(format.RecordOBDExtended, 1, 0, 0, p0); err != nil {
+		return err
+	}
+
+	// Record 1: all sentinels — a cold-only cycle where nothing was sampled.
+	p1 := obdExtPayload(0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFF, -128, -128, -128, 0, 0, 1200)
+	if err := w.Append(format.RecordOBDExtended, 1, 0, 1000, p1); err != nil {
+		return err
+	}
+
+	// Record 2: MAP saturated at 255 kPa. Lambda 0.85 → raw 27852.
+	// No baro (sentinel) so boost PSI is uncomputable.
+	p2 := obdExtPayload(255, 0xFFFF, 27852, 0xFFFF, 0xFF, -128, -128, -128, 2, 2, 200)
+	if err := w.Append(format.RecordOBDExtended, 1, 0, 2000, p2); err != nil {
+		return err
+	}
+
+	exp, err := scanExpect(w.Bytes(), format.ScanState{})
+	if err != nil {
+		return err
+	}
+
+	// Derived values for record 0.
+	boostPSI0 := float64(230-101) * 0.1450377   // 18.71 psi
+	lambda0 := float64(28836) / 10000.0          // 0.8836 (ten-thousandths resolution)
+	absLoadPct0 := float64(484) * 100.0 / 255.0  // 189.80%
+
+	// Derived values for record 2.
+	lambda2 := float64(27852) / 10000.0 // 0.7852 (ten-thousandths)
+
+	records := []expectedOBDExt{
+		{
+			MAPkPa: ptrU16(230), MAFcgps: ptrU16(15000),
+			LambdaE4: ptrU16(28836), AbsLoadRaw: ptrU16(484),
+			BaroKPa: ptrU8(101), AmbientTempC: ptrI8(28),
+			FuelTrimShortPct: ptrI8(-5), FuelTrimLongPct: ptrI8(18),
+			PIDsRequested: 6, PIDsAnswered: 6, PollCadenceMS: 200,
+			MAPSaturated: false,
+			BoostPSI: ptrF64(boostPSI0), Lambda: ptrF64(lambda0),
+			AbsLoadPct: ptrF64(absLoadPct0),
+		},
+		{
+			PIDsRequested: 0, PIDsAnswered: 0, PollCadenceMS: 1200,
+			MAPSaturated: false,
+		},
+		{
+			MAPkPa: ptrU16(255), LambdaE4: ptrU16(27852),
+			PIDsRequested: 2, PIDsAnswered: 2, PollCadenceMS: 200,
+			MAPSaturated: true,
+			Lambda: ptrF64(lambda2),
+		},
+	}
+
+	return writeVector(dir, "obd-extended", &expectation{
+		Description: "Three OBD_EXTENDED records: full boost, all sentinels, and MAP saturated.",
+		Asserts: "Every field decodes to the expected value or is absent when sentinel. " +
+			"MAPSaturated is true only when MAP is 255 kPa. BoostPSI requires both MAP " +
+			"and baro; with either absent it is uncomputable, not assumed from sea level.",
+		Scan: exp,
+		OBDExt: &obdExtExpectation{
+			Records: records,
+			Note: "Sentinels: u16 0xFFFF, u8 0xFF, i8 0x80 (-128). A sentinel field " +
+				"is absent, not zero. Derived values use the standard's own formulas.",
 		},
 	}, segmentFiles(w.Bytes()))
 }

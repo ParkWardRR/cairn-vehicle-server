@@ -90,6 +90,26 @@ type vectorExpectation struct {
 		ImageLength        uint32 `json:"image_length"`
 		UpdateKeyHex       string `json:"update_public_key_hex"`
 	} `json:"update"`
+
+	OBDExt *struct {
+		Records []struct {
+			MAPkPa           *uint16  `json:"map_kpa"`
+			MAFcgps          *uint16  `json:"maf_cgps"`
+			LambdaE4         *uint16  `json:"lambda_e4"`
+			AbsLoadRaw       *uint16  `json:"abs_load_raw"`
+			BaroKPa          *uint8   `json:"baro_kpa"`
+			AmbientTempC     *int8    `json:"ambient_temp_c"`
+			FuelTrimShortPct *int8    `json:"fuel_trim_short_pct"`
+			FuelTrimLongPct  *int8    `json:"fuel_trim_long_pct"`
+			PIDsRequested    uint32   `json:"pids_requested"`
+			PIDsAnswered     uint32   `json:"pids_answered"`
+			PollCadenceMS    uint16   `json:"poll_cadence_ms"`
+			MAPSaturated     bool     `json:"map_saturated"`
+			BoostPSI         *float64 `json:"boost_psi"`
+			Lambda           *float64 `json:"lambda"`
+			AbsLoadPct       *float64 `json:"abs_load_pct"`
+		} `json:"records"`
+	} `json:"obd_ext"`
 }
 
 func TestConformanceVectors(t *testing.T) {
@@ -120,15 +140,16 @@ func TestConformanceVectors(t *testing.T) {
 
 		t.Run(e.Name(), func(t *testing.T) {
 			switch {
-			case exp.Events != nil, exp.Health != nil:
-				// These carry a scan as well, so the frames are walked and the
-				// payloads checked against the same bytes.
+			case exp.Events != nil, exp.Health != nil, exp.OBDExt != nil:
 				checkScanVector(t, dir, &exp)
 				if exp.Events != nil {
 					checkEventsVector(t, dir, &exp)
 				}
 				if exp.Health != nil {
 					checkHealthVector(t, dir, &exp)
+				}
+				if exp.OBDExt != nil {
+					checkOBDExtVector(t, dir, &exp)
 				}
 			case exp.Scan != nil:
 				checkScanVector(t, dir, &exp)
@@ -501,6 +522,163 @@ func checkHealthVector(t *testing.T, dir string, exp *vectorExpectation) {
 	if seen != len(exp.Health.Records) {
 		t.Errorf("found %d health records, want %d", seen, len(exp.Health.Records))
 	}
+}
+
+func checkOBDExtVector(t *testing.T, dir string, exp *vectorExpectation) {
+	t.Helper()
+
+	b, err := os.ReadFile(filepath.Join(dir, "segment.bin"))
+	if err != nil {
+		t.Fatalf("read segment.bin: %v", err)
+	}
+
+	res, err := ScanSegment(b, ScanState{})
+	if err != nil {
+		t.Fatalf("ScanSegment: %v", err)
+	}
+
+	var seen int
+	for i := range res.Frames {
+		f := &res.Frames[i]
+		if f.RecordType != RecordOBDExtended {
+			continue
+		}
+		if seen >= len(exp.OBDExt.Records) {
+			t.Fatalf("segment holds more OBD_EXTENDED records than expected")
+		}
+		want := exp.OBDExt.Records[seen]
+		seen++
+
+		o, err := ParseOBDExtended(f.Payload)
+		if err != nil {
+			t.Errorf("record %d does not parse: %v", seen-1, err)
+			continue
+		}
+
+		checkPtrU16(t, seen-1, "map_kpa", o.MAPkPa, want.MAPkPa)
+		checkPtrU16(t, seen-1, "maf_cgps", o.MAFcgps, want.MAFcgps)
+		checkPtrU16(t, seen-1, "lambda_e4", o.LambdaE4, want.LambdaE4)
+		checkPtrU16(t, seen-1, "abs_load_raw", o.AbsLoadRaw, want.AbsLoadRaw)
+		checkPtrU8(t, seen-1, "baro_kpa", o.BaroKPa, want.BaroKPa)
+		checkPtrI8(t, seen-1, "ambient_temp_c", o.AmbientTempC, want.AmbientTempC)
+		checkPtrI8(t, seen-1, "fuel_trim_short_pct", o.FuelTrimShortPct, want.FuelTrimShortPct)
+		checkPtrI8(t, seen-1, "fuel_trim_long_pct", o.FuelTrimLongPct, want.FuelTrimLongPct)
+
+		if o.PIDsRequested != want.PIDsRequested {
+			t.Errorf("record %d pids_requested = %d, want %d", seen-1, o.PIDsRequested, want.PIDsRequested)
+		}
+		if o.PIDsAnswered != want.PIDsAnswered {
+			t.Errorf("record %d pids_answered = %d, want %d", seen-1, o.PIDsAnswered, want.PIDsAnswered)
+		}
+		if o.PollCadenceMS != want.PollCadenceMS {
+			t.Errorf("record %d poll_cadence_ms = %d, want %d", seen-1, o.PollCadenceMS, want.PollCadenceMS)
+		}
+
+		if o.MAPSaturated() != want.MAPSaturated {
+			t.Errorf("record %d MAPSaturated() = %v, want %v", seen-1, o.MAPSaturated(), want.MAPSaturated)
+		}
+
+		if want.BoostPSI != nil {
+			got, ok := o.BoostPSI()
+			if !ok {
+				t.Errorf("record %d BoostPSI() unavailable, want %.2f", seen-1, *want.BoostPSI)
+			} else if abs(got-*want.BoostPSI) > 0.01 {
+				t.Errorf("record %d BoostPSI() = %.4f, want %.4f", seen-1, got, *want.BoostPSI)
+			}
+		} else {
+			if _, ok := o.BoostPSI(); ok {
+				t.Errorf("record %d BoostPSI() should be unavailable", seen-1)
+			}
+		}
+
+		if want.Lambda != nil {
+			got, ok := o.Lambda()
+			if !ok {
+				t.Errorf("record %d Lambda() unavailable, want %.4f", seen-1, *want.Lambda)
+			} else if abs(got-*want.Lambda) > 0.0001 {
+				t.Errorf("record %d Lambda() = %.6f, want %.6f", seen-1, got, *want.Lambda)
+			}
+		} else {
+			if _, ok := o.Lambda(); ok {
+				t.Errorf("record %d Lambda() should be unavailable", seen-1)
+			}
+		}
+
+		if want.AbsLoadPct != nil {
+			got, ok := o.AbsoluteLoadPct()
+			if !ok {
+				t.Errorf("record %d AbsoluteLoadPct() unavailable, want %.2f", seen-1, *want.AbsLoadPct)
+			} else if abs(got-*want.AbsLoadPct) > 0.01 {
+				t.Errorf("record %d AbsoluteLoadPct() = %.4f, want %.4f", seen-1, got, *want.AbsLoadPct)
+			}
+		} else {
+			if _, ok := o.AbsoluteLoadPct(); ok {
+				t.Errorf("record %d AbsoluteLoadPct() should be unavailable", seen-1)
+			}
+		}
+	}
+
+	if seen != len(exp.OBDExt.Records) {
+		t.Errorf("found %d OBD_EXTENDED records, want %d", seen, len(exp.OBDExt.Records))
+	}
+}
+
+func checkPtrU16(t *testing.T, idx int, name string, got, want *uint16) {
+	t.Helper()
+	if want == nil {
+		if got != nil {
+			t.Errorf("record %d %s = %d, want absent", idx, name, *got)
+		}
+		return
+	}
+	if got == nil {
+		t.Errorf("record %d %s absent, want %d", idx, name, *want)
+		return
+	}
+	if *got != *want {
+		t.Errorf("record %d %s = %d, want %d", idx, name, *got, *want)
+	}
+}
+
+func checkPtrU8(t *testing.T, idx int, name string, got, want *uint8) {
+	t.Helper()
+	if want == nil {
+		if got != nil {
+			t.Errorf("record %d %s = %d, want absent", idx, name, *got)
+		}
+		return
+	}
+	if got == nil {
+		t.Errorf("record %d %s absent, want %d", idx, name, *want)
+		return
+	}
+	if *got != *want {
+		t.Errorf("record %d %s = %d, want %d", idx, name, *got, *want)
+	}
+}
+
+func checkPtrI8(t *testing.T, idx int, name string, got, want *int8) {
+	t.Helper()
+	if want == nil {
+		if got != nil {
+			t.Errorf("record %d %s = %d, want absent", idx, name, *got)
+		}
+		return
+	}
+	if got == nil {
+		t.Errorf("record %d %s absent, want %d", idx, name, *want)
+		return
+	}
+	if *got != *want {
+		t.Errorf("record %d %s = %d, want %d", idx, name, *got, *want)
+	}
+}
+
+func abs(x float64) float64 {
+	if x < 0 {
+		return -x
+	}
+	return x
 }
 
 // checkUpdateVector verifies the OTA descriptor signature against the pinned
