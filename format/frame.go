@@ -29,6 +29,7 @@ const (
 	RecordStateTransition RecordType = 0x07
 	RecordGNSSGap         RecordType = 0x08
 	RecordPolicySnapshot  RecordType = 0x09
+	RecordOBDExtended     RecordType = 0x0A
 )
 
 // Known reports whether this implementation understands the record type.
@@ -37,7 +38,7 @@ const (
 // decoder. The frame CRC still applies, so a skipped record remains
 // integrity-checked.
 func (t RecordType) Known() bool {
-	return t >= RecordGNSSSample && t <= RecordPolicySnapshot
+	return t >= RecordGNSSSample && t <= RecordOBDExtended
 }
 
 func (t RecordType) String() string {
@@ -60,6 +61,8 @@ func (t RecordType) String() string {
 		return "GNSS_GAP"
 	case RecordPolicySnapshot:
 		return "POLICY_SNAPSHOT"
+	case RecordOBDExtended:
+		return "OBD_EXTENDED"
 	default:
 		return fmt.Sprintf("UNKNOWN(0x%02x)", uint8(t))
 	}

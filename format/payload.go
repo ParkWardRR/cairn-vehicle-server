@@ -545,3 +545,105 @@ func ParseTripEvent(p []byte) (*TripEvent, error) {
 		Detail:    string(p[minLen : minLen+detailLen]),
 	}, nil
 }
+
+// OBDExtended is the boosted-engine and mixture record (§4.10).
+//
+// Pressures are absolute, as the ECU reports them. Gauge boost — what a boost
+// gauge shows — is MAPkPa minus BaroKPa; see BoostPSI. Storing gauge on the
+// device would have baked one barometric reading permanently into the data,
+// and the whole point of this format is that the raw measurement survives for
+// someone to reinterpret later.
+type OBDExtended struct {
+	// MAPkPa is intake manifold absolute pressure, PID 0x0B.
+	MAPkPa *uint16
+	// MAFcgps is mass air flow in centigrams per second, PID 0x10. Scaled so a
+	// u16 covers a turbocharged engine's range without losing idle resolution.
+	MAFcgps *uint16
+	// LambdaE4 is the equivalence ratio times 10000, PID 0x44. 10000 is
+	// stoichiometric; below is rich. Independent of the fuel's actual
+	// stoichiometric ratio, which is what makes it the right mixture signal.
+	LambdaE4 *uint16
+	// AbsLoadPctE1 is absolute engine load times ten, PID 0x43. Scaled rather
+	// than clamped because it legitimately exceeds 100% under boost.
+	AbsLoadPctE1 *uint16
+
+	BaroKPa          *uint8
+	AmbientTempC     *int8
+	FuelTrimShortPct *int8
+	FuelTrimLongPct  *int8
+
+	PIDsRequested uint32
+	PIDsAnswered  uint32
+	PollCadenceMS uint16
+}
+
+// BoostGaugeKPa returns gauge pressure — boost above ambient — and whether it
+// could be computed. Needs both the manifold and barometric readings; with
+// either missing the answer is unknown rather than guessed from a sea-level
+// assumption.
+func (o *OBDExtended) BoostGaugeKPa() (float64, bool) {
+	if o.MAPkPa == nil || o.BaroKPa == nil {
+		return 0, false
+	}
+	return float64(*o.MAPkPa) - float64(*o.BaroKPa), true
+}
+
+// BoostPSI is BoostGaugeKPa in pounds per square inch, the unit boost is
+// usually discussed in. Negative values are vacuum, which is what a throttled
+// engine off boost actually reads.
+func (o *OBDExtended) BoostPSI() (float64, bool) {
+	kpa, ok := o.BoostGaugeKPa()
+	if !ok {
+		return 0, false
+	}
+	return kpa * 0.1450377, true
+}
+
+// Lambda returns the equivalence ratio as a float, and whether it was reported.
+func (o *OBDExtended) Lambda() (float64, bool) {
+	if o.LambdaE4 == nil {
+		return 0, false
+	}
+	return float64(*o.LambdaE4) / 10000.0, true
+}
+
+// ParseOBDExtended decodes §4.10.
+func ParseOBDExtended(p []byte) (*OBDExtended, error) {
+	const want = 24
+	if len(p) != want {
+		return nil, fmt.Errorf("OBD_EXTENDED payload is %d bytes, want %d", len(p), want)
+	}
+
+	var o OBDExtended
+
+	if v := binary.LittleEndian.Uint16(p[0:2]); v != sentinelU16 {
+		o.MAPkPa = &v
+	}
+	if v := binary.LittleEndian.Uint16(p[2:4]); v != sentinelU16 {
+		o.MAFcgps = &v
+	}
+	if v := binary.LittleEndian.Uint16(p[4:6]); v != sentinelU16 {
+		o.LambdaE4 = &v
+	}
+	if v := binary.LittleEndian.Uint16(p[6:8]); v != sentinelU16 {
+		o.AbsLoadPctE1 = &v
+	}
+	if v := p[8]; v != sentinelU8 {
+		o.BaroKPa = &v
+	}
+	if v := int8(p[9]); v != sentinelI8 {
+		o.AmbientTempC = &v
+	}
+	if v := int8(p[10]); v != sentinelI8 {
+		o.FuelTrimShortPct = &v
+	}
+	if v := int8(p[11]); v != sentinelI8 {
+		o.FuelTrimLongPct = &v
+	}
+
+	o.PIDsRequested = binary.LittleEndian.Uint32(p[12:16])
+	o.PIDsAnswered = binary.LittleEndian.Uint32(p[16:20])
+	o.PollCadenceMS = binary.LittleEndian.Uint16(p[20:22])
+
+	return &o, nil
+}

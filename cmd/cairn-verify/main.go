@@ -1,21 +1,3 @@
-// Command cairn-verify checks bundles straight off an SD card, with no server.
-//
-// This answers the question that is otherwise ambiguous after a drive: did the
-// firmware write correct data? A failed sync could mean a bad bundle, a refused
-// enrolment, a wrong receipt key or no network, and those look similar from the
-// device's logs. Verifying the card separates "the device recorded this
-// correctly" from "the upload worked", which are different problems with
-// different fixes.
-//
-// It deliberately reuses server/format — the reference implementation the
-// specification is written against — rather than reimplementing the checks. A
-// verifier with its own idea of the format would be a third opinion to
-// reconcile, not an oracle.
-//
-//	cairn-verify /Volumes/CARD/cairn                 whole card
-//	cairn-verify /Volumes/CARD/cairn/bundles/01J...  one bundle
-//	cairn-verify -device-key <hex> ...               also verify signatures
-//	cairn-verify -json ...                           machine-readable
 package main
 
 import (
@@ -259,6 +241,19 @@ type bundleResult struct {
 	HealthStates   []string `json:"health_states,omitempty"`
 	HealthRecords  int      `json:"health_records,omitempty"`
 	HealthDegraded int      `json:"health_records_degraded,omitempty"`
+
+	// Boost and mixture, from OBD_EXTENDED. Peak rather than mean: a tune is
+	// judged on what it reaches, and an average across idle and cruise says
+	// nothing about it.
+	BoostRecords      int      `json:"boost_records,omitempty"`
+	BoostAnswered     int      `json:"boost_records_answered,omitempty"`
+	PeakBoostPSI      *float64 `json:"peak_boost_psi,omitempty"`
+	LambdaAtPeakBoost *float64 `json:"lambda_at_peak_boost,omitempty"`
+	HaveTrims         bool     `json:"-"`
+	TrimShortMin      int8     `json:"fuel_trim_short_min,omitempty"`
+	TrimShortMax      int8     `json:"fuel_trim_short_max,omitempty"`
+	TrimLongMin       int8     `json:"fuel_trim_long_min,omitempty"`
+	TrimLongMax       int8     `json:"fuel_trim_long_max,omitempty"`
 
 	// Standby windows and the supply trend, recovered from the health-region
 	// transition pairs. The only view of parked power behaviour available
@@ -916,6 +911,31 @@ func report(results []bundleResult, opts options) {
 		 * draw — usually larger than a dongle's. Printing milliamps here would
 		 * be inventing precision.
 		 */
+		/*
+		 * Boost and mixture. Peak rather than mean, and lambda reported at the
+		 * moment of peak boost specifically: a tune is judged on what it
+		 * reaches and how the mixture holds there, and an average across idle
+		 * and cruise says nothing about either.
+		 */
+		if r.BoostRecords > 0 {
+			if r.PeakBoostPSI != nil {
+				fmt.Printf("  boost        peak %+.1f psi over %d record(s)",
+					*r.PeakBoostPSI, r.BoostRecords)
+				if r.LambdaAtPeakBoost != nil {
+					fmt.Printf(", lambda %.2f there", *r.LambdaAtPeakBoost)
+				}
+				fmt.Println()
+			} else {
+				fmt.Printf("  boost        %d record(s), %d answered; no usable "+
+					"pressure pair\n", r.BoostRecords, r.BoostAnswered)
+			}
+
+			if r.HaveTrims {
+				fmt.Printf("  fuel trim    short %+d..%+d%%, long %+d..%+d%%\n",
+					r.TrimShortMin, r.TrimShortMax, r.TrimLongMin, r.TrimLongMax)
+			}
+		}
+
 		if r.StandbyWindows > 0 || r.VoltageSamples > 0 {
 			if r.StandbyWindows > 0 {
 				fmt.Printf("  power        %d standby window(s), %s asleep (%.0f%% of the span)",
@@ -959,5 +979,100 @@ func printCounts(counts map[string]int) {
 	sort.Strings(keys)
 	for _, k := range keys {
 		fmt.Printf("      %-18s %d\n", k, counts[k])
+	}
+}
+
+// collectBoost summarizes the OBD_EXTENDED records: peak boost, the mixture at
+// that moment, and the fuel trims.
+//
+// These are the numbers a tuning question is actually asking, and summarizing
+// them here means a card can answer it without a server or a database. Peak
+// boost rather than mean, because a tune is judged on what it reaches and holds;
+// lambda is reported at peak boost specifically, since mixture under load is
+// what matters and an average over idle and cruise says nothing.
+func collectBoost(res *bundleResult, sr *format.ScanResult) {
+	var peakPSI float64
+	var havePeak bool
+	var lambdaAtPeak float64
+	var haveLambdaAtPeak bool
+
+	var trimShortMin, trimShortMax int8 = 127, -128
+	var trimLongMin, trimLongMax int8 = 127, -128
+	var haveTrims bool
+
+	answered, total := 0, 0
+
+	for i := range sr.Frames {
+		f := &sr.Frames[i]
+		if f.RecordType != format.RecordOBDExtended {
+			continue
+		}
+
+		o, err := format.ParseOBDExtended(f.Payload)
+		if err != nil {
+			res.fail("an OBD_EXTENDED record at seq %d does not parse: %v",
+				f.Seq, err)
+			continue
+		}
+
+		total++
+		if o.PIDsAnswered > 0 {
+			answered++
+		}
+
+		if psi, ok := o.BoostPSI(); ok {
+			if !havePeak || psi > peakPSI {
+				peakPSI, havePeak = psi, true
+				if l, ok := o.Lambda(); ok {
+					lambdaAtPeak, haveLambdaAtPeak = l, true
+				} else {
+					haveLambdaAtPeak = false
+				}
+			}
+		}
+
+		if o.FuelTrimShortPct != nil {
+			haveTrims = true
+			if *o.FuelTrimShortPct < trimShortMin {
+				trimShortMin = *o.FuelTrimShortPct
+			}
+			if *o.FuelTrimShortPct > trimShortMax {
+				trimShortMax = *o.FuelTrimShortPct
+			}
+		}
+		if o.FuelTrimLongPct != nil {
+			haveTrims = true
+			if *o.FuelTrimLongPct < trimLongMin {
+				trimLongMin = *o.FuelTrimLongPct
+			}
+			if *o.FuelTrimLongPct > trimLongMax {
+				trimLongMax = *o.FuelTrimLongPct
+			}
+		}
+	}
+
+	res.BoostRecords = total
+	res.BoostAnswered = answered
+
+	if havePeak {
+		res.PeakBoostPSI = &peakPSI
+		if haveLambdaAtPeak {
+			res.LambdaAtPeakBoost = &lambdaAtPeak
+		}
+	}
+	if haveTrims {
+		res.TrimShortMin, res.TrimShortMax = trimShortMin, trimShortMax
+		res.TrimLongMin, res.TrimLongMax = trimLongMin, trimLongMax
+		res.HaveTrims = true
+	}
+
+	/*
+	 * An ECU that answered none of these is worth stating plainly rather than
+	 * leaving the reader to wonder why there is no boost figure. PID support
+	 * varies by vehicle and is only discoverable by asking.
+	 */
+	if total > 0 && answered == 0 {
+		res.note("%d OBD_EXTENDED record(s) but this ECU answered none of the "+
+			"boost and mixture PIDs", total)
 	}
 }

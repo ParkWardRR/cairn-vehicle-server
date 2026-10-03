@@ -57,6 +57,7 @@ type Result struct {
 	Positions   []Position
 	IMU         []IMU
 	OBD         []OBD
+	Boost       []Boost
 	Status      []Status
 	Transitions []Transition
 	Gaps        []Gap
@@ -501,6 +502,14 @@ func (r *Result) decodeFrame(manifest *format.Manifest, f *format.Frame, segment
 		}
 		r.OBD = append(r.OBD, newOBD(manifest, f, s))
 
+	case format.RecordOBDExtended:
+		o, err := format.ParseOBDExtended(f.Payload)
+		if err != nil {
+			warn(err)
+			return
+		}
+		r.Boost = append(r.Boost, newBoost(manifest, f, o))
+
 	case format.RecordDeviceHealth:
 		s, err := format.ParseDeviceHealth(f.Payload)
 		if err != nil {
@@ -740,4 +749,62 @@ func eventID(contentRoot [32]byte, kind string, seq uint32) [16]byte {
 	var id [16]byte
 	copy(id[:], h.Sum(nil)[:16])
 	return id
+}
+
+// Boost is one decoded OBD_EXTENDED record: the boosted-engine and mixture
+// signals, plus the derived gauge pressure a tuning question actually asks for.
+//
+// BoostPSI and Lambda are pointers because both can be genuinely unknown — a
+// missing barometric reading makes gauge pressure uncomputable, and refusing to
+// assume sea level is deliberate.
+type Boost struct {
+	Seq         uint32
+	ObservedAt  time.Time
+	MonotonicMS uint32
+
+	MAPkPa           *uint16
+	BaroKPa          *uint8
+	MAFcgps          *uint16
+	LambdaE4         *uint16
+	AbsLoadPctE1     *uint16
+	AmbientTempC     *int8
+	FuelTrimShortPct *int8
+	FuelTrimLongPct  *int8
+
+	// BoostPSI is gauge pressure, derived. Nil when either pressure is absent.
+	BoostPSI *float64
+	// Lambda is the equivalence ratio, derived. Nil when unreported.
+	Lambda *float64
+
+	PIDsRequested uint32
+	PIDsAnswered  uint32
+	PollCadenceMS uint16
+}
+
+func newBoost(manifest *format.Manifest, f *format.Frame, o *format.OBDExtended) Boost {
+	b := Boost{
+		Seq:              f.Seq,
+		ObservedAt:       observedAt(manifest, f.MonotonicMS, 0),
+		MonotonicMS:      f.MonotonicMS,
+		MAPkPa:           o.MAPkPa,
+		BaroKPa:          o.BaroKPa,
+		MAFcgps:          o.MAFcgps,
+		LambdaE4:         o.LambdaE4,
+		AbsLoadPctE1:     o.AbsLoadPctE1,
+		AmbientTempC:     o.AmbientTempC,
+		FuelTrimShortPct: o.FuelTrimShortPct,
+		FuelTrimLongPct:  o.FuelTrimLongPct,
+		PIDsRequested:    o.PIDsRequested,
+		PIDsAnswered:     o.PIDsAnswered,
+		PollCadenceMS:    o.PollCadenceMS,
+	}
+
+	if psi, ok := o.BoostPSI(); ok {
+		b.BoostPSI = &psi
+	}
+	if l, ok := o.Lambda(); ok {
+		b.Lambda = &l
+	}
+
+	return b
 }
