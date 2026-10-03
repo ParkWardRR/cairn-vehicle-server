@@ -320,6 +320,12 @@ func verifyBundle(b discoveredBundle, opts options) bundleResult {
 		}
 		collectPolicy(&res, sr)
 		collectEvents(&res, sr)
+		/*
+		 * Boost and mixture live in the capture chain, not the journal. Called
+		 * per segment and accumulating, because a resumed capture spans several
+		 * segments and a peak in any of them is still the peak.
+		 */
+		collectBoost(&res, sr)
 		scannedFrames += len(sr.Frames)
 		totalDiscarded += sr.DiscardedTailBytes
 
@@ -1051,19 +1057,37 @@ func collectBoost(res *bundleResult, sr *format.ScanResult) {
 		}
 	}
 
-	res.BoostRecords = total
-	res.BoostAnswered = answered
+	/* Accumulate: this runs once per capture segment. */
+	res.BoostRecords += total
+	res.BoostAnswered += answered
 
-	if havePeak {
+	if havePeak && (res.PeakBoostPSI == nil || peakPSI > *res.PeakBoostPSI) {
 		res.PeakBoostPSI = &peakPSI
+		/* Lambda travels with the peak it was measured at, or not at all. */
+		res.LambdaAtPeakBoost = nil
 		if haveLambdaAtPeak {
 			res.LambdaAtPeakBoost = &lambdaAtPeak
 		}
 	}
 	if haveTrims {
-		res.TrimShortMin, res.TrimShortMax = trimShortMin, trimShortMax
-		res.TrimLongMin, res.TrimLongMax = trimLongMin, trimLongMax
-		res.HaveTrims = true
+		if !res.HaveTrims {
+			res.TrimShortMin, res.TrimShortMax = trimShortMin, trimShortMax
+			res.TrimLongMin, res.TrimLongMax = trimLongMin, trimLongMax
+			res.HaveTrims = true
+		} else {
+			if trimShortMin < res.TrimShortMin {
+				res.TrimShortMin = trimShortMin
+			}
+			if trimShortMax > res.TrimShortMax {
+				res.TrimShortMax = trimShortMax
+			}
+			if trimLongMin < res.TrimLongMin {
+				res.TrimLongMin = trimLongMin
+			}
+			if trimLongMax > res.TrimLongMax {
+				res.TrimLongMax = trimLongMax
+			}
+		}
 	}
 
 	/*
