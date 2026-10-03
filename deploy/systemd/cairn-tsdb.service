@@ -1,0 +1,67 @@
+[Unit]
+# Cairn in-memory analytical store.
+#
+# A derived view over the CAS and the SD card, held in an in-memory DuckDB. It
+# writes nothing durable: a restart rebuilds from the raw bundles in well under
+# a second, and refuses to serve if the rebuild does not reproduce.
+#
+# SD card data reaches this host as a mirror of the card's bundles/ directory at
+# /var/lib/cairn-tsdb/sd/bundles. Bundles also present in the CAS are
+# deduplicated on content root, so mirroring the card again is harmless.
+Description=Cairn in-memory time-series store
+Documentation=https://github.com/ParkWardRR/Cairn
+After=cairn-server.service
+
+[Service]
+Type=simple
+User=cairn
+Group=cairn
+
+# Loopback by default: the data includes GNSS positions, and the endpoint takes
+# caller-supplied SQL. Reach it with `ssh -L 8480:127.0.0.1:8480 <host>`.
+ExecStart=/usr/local/bin/cairn-tsdb \
+    -data /var/lib/cairn \
+    -sd /var/lib/cairn-tsdb/sd \
+    -addr 127.0.0.1:8480 \
+    -memory 2GB \
+    -watch 5s
+
+Restart=on-failure
+RestartSec=5s
+
+# DuckDB's own ceiling is 2GB; this is the backstop above it. The VM shares its
+# RAM with the runner and the ingest stack, and an analytical engine that grows
+# without bound is how those get starved.
+MemoryMax=3G
+MemorySwapMax=0
+Nice=5
+
+StateDirectory=cairn-tsdb
+StateDirectoryMode=0750
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+SystemCallArchitectures=native
+
+# The server's data directory is read, never written. The CAS is copied out
+# through a private scratch store precisely so this process never opens it for
+# write.
+ReadOnlyPaths=/var/lib/cairn
+
+[Install]
+WantedBy=multi-user.target

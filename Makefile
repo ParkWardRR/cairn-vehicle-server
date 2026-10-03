@@ -56,7 +56,7 @@ ENV := $(if $(GOAMD64),GOAMD64=$(GOAMD64),)
 
 CMDS := cairn-server cairn-verify cairn-ledger cairn-signfw
 
-.PHONY: all build test vet bench bench-isa clean cpuinfo
+.PHONY: all build build-tsdb test vet bench bench-isa clean cpuinfo
 
 all: build
 
@@ -74,6 +74,12 @@ build: cpuinfo
 	  $(ENV) $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o $(BINDIR)/$$c ./cmd/$$c || exit 1; \
 	done
 	@echo "built into $(BINDIR)/$(if $(GOAMD64), with GOAMD64=$(GOAMD64),)"
+
+# cairn-tsdb links DuckDB statically through cgo, so it needs a C toolchain and
+# is kept out of CMDS: the ingest binaries stay pure Go and cross-compilable.
+build-tsdb: cpuinfo
+	@mkdir -p $(BINDIR)
+	CGO_ENABLED=1 $(ENV) $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o $(BINDIR)/cairn-tsdb ./cmd/cairn-tsdb
 
 test:
 	$(ENV) $(GO) test ./...
