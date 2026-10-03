@@ -174,3 +174,45 @@ func TestIgnoresUnrelatedTransitions(t *testing.T) {
 		t.Errorf("got %d windows from unrelated transitions, want 0", len(s.Windows))
 	}
 }
+
+// A rate extrapolated from a few seconds is not a measurement. A real bundle
+// reported +476037 mV/h — 476 volts an hour — from a short window spanning an
+// engine start, which looks like data and is noise.
+func TestShortSpansProduceNoDrainRate(t *testing.T) {
+	// Thirty seconds, 2000 mV of rise: a plausible engine start.
+	s := Summarize(nil, []decode.Status{
+		health(1, 0, 12_400),
+		health(2, 30*1000, 14_400),
+	})
+
+	if s.DrainMVPerHour != 0 {
+		t.Errorf("drain %.1f mV/h from a 30 s window; want 0, because "+
+			"extrapolating an hour from half a minute invents precision",
+			s.DrainMVPerHour)
+	}
+	if s.DrainSpanMS != 0 {
+		t.Errorf("DrainSpanMS = %d, want 0 when no rate was produced",
+			s.DrainSpanMS)
+	}
+
+	// The readings themselves are still reported — only the rate is withheld.
+	if s.VoltageSamples != 2 || s.DropMV != -2000 {
+		t.Errorf("samples=%d drop=%d; the readings should survive",
+			s.VoltageSamples, s.DropMV)
+	}
+}
+
+// A span long enough to mean something still yields a rate.
+func TestLongSpanStillProducesDrainRate(t *testing.T) {
+	s := Summarize(nil, []decode.Status{
+		health(1, 0, 12_600),
+		health(2, 6*3600*1000, 12_540),
+	})
+
+	if got := s.DrainMVPerHour; got < -10.01 || got > -9.99 {
+		t.Errorf("drain %.3f mV/h over six hours, want about -10", got)
+	}
+	if s.DrainSpanMS != 6*3600*1000 {
+		t.Errorf("DrainSpanMS = %d, want the full six hours", s.DrainSpanMS)
+	}
+}

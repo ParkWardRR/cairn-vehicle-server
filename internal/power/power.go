@@ -101,8 +101,15 @@ type Summary struct {
 	DropMV int32
 
 	// DrainMVPerHour is the mean rate of change, negative while discharging.
-	// Zero when fewer than two samples or no elapsed time.
+	// Zero when the samples span too little time to extrapolate from — see the
+	// floor in Summarize, which exists because a few seconds across an engine
+	// start once yielded 476 volts an hour.
 	DrainMVPerHour float64
+
+	// DrainSpanMS is the window DrainMVPerHour was computed over, zero when no
+	// rate was produced. Reported so a reader can judge the figure rather than
+	// having to trust it.
+	DrainSpanMS uint32
 }
 
 // elapsed subtracts two monotonic millisecond counters, tolerating the uint32
@@ -184,9 +191,25 @@ func Summarize(transitions []decode.Transition, statuses []decode.Status) Summar
 		s.LastVoltageAt = last.MonotonicMS
 		s.DropMV = s.FirstVoltageMV - s.LastVoltageMV
 
-		if ms := elapsed(first.MonotonicMS, last.MonotonicMS); ms > 0 {
+		/*
+		 * Only extrapolate a rate over a span long enough to mean something.
+		 *
+		 * Dividing by an arbitrarily small elapsed time produces arbitrarily
+		 * large nonsense: a real bundle reported +476037 mV/h, which is 476
+		 * volts an hour, from a few seconds spanning an engine start. A figure
+		 * like that is worse than no figure, because it looks like a
+		 * measurement and will be read as one.
+		 *
+		 * Ten minutes is the floor. Parked drain is a multi-hour effect — the
+		 * six-hour heartbeat is what the series is really built from — so
+		 * refusing to guess from a short window costs nothing real.
+		 */
+		const minSpanMS = 10 * 60 * 1000
+
+		if ms := elapsed(first.MonotonicMS, last.MonotonicMS); ms >= minSpanMS {
 			hours := float64(ms) / 3600000.0
 			s.DrainMVPerHour = float64(s.LastVoltageMV-s.FirstVoltageMV) / hours
+			s.DrainSpanMS = ms
 		}
 	}
 
