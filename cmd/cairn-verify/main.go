@@ -900,9 +900,20 @@ func report(results []bundleResult, opts options) {
 				// The device's own account of what was wrong. Worth reading before
 				// concluding anything from the data: a trip missing position looks
 				// like a defect until this says DEGRADED_GNSS.
-				fmt.Printf("  health       %d of %d record(s) degraded: %s\n",
+				//
+				// Joined with ", " and labelled as distinct flags, because "|"
+				// reads as one bitmask and this is a union over every record in
+				// the bundle. A capture that spanned a bench session and a drive
+				// reported LOW_POWER, DEGRADED_SENSING alongside the driving
+				// flags, which looked like the car had been in low power for the
+				// whole trip rather than the device having sat on a desk earlier
+				// in the same unsealed capture. For a tool whose job is saying
+				// whether a trip can be trusted, implying a fault that did not
+				// happen is as bad as missing one that did.
+				fmt.Printf("  health       %d of %d record(s) degraded; flags seen "+
+					"across them: %s\n",
 					r.HealthDegraded, r.HealthRecords,
-					strings.Join(r.HealthStates, "|"))
+					strings.Join(r.HealthStates, ", "))
 			}
 		}
 
