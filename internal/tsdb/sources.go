@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/ParkWardRR/Cairn/server/format"
 	"github.com/ParkWardRR/Cairn/server/internal/cas"
@@ -114,44 +115,55 @@ func copyObject(dst *cas.Store, srcCAS string, digest [32]byte) error {
 
 // snapshotServer reads committed bundles from the server's data directory.
 //
-// A bundle counts as committed when its receipt exists. An offer alone is a
-// promise the device made, not data the server accepted.
+// Discovery is keyed on receipts rather than offers: a receipt is the durable
+// proof that a bundle was committed, while an offer is housekeeping state that
+// is swept after receipting. Reading from receipts means every committed bundle
+// is visible regardless of whether its offer record still exists.
 func snapshotServer(dst *cas.Store, dataDir string) ([]Ref, []string, error) {
-	offers, err := os.ReadDir(filepath.Join(dataDir, "offers"))
+	receiptDir := filepath.Join(dataDir, "receipts")
+	entries, err := os.ReadDir(receiptDir)
 	if err != nil {
-		return nil, nil, fmt.Errorf("read offers: %w", err)
+		return nil, nil, fmt.Errorf("read receipts: %w", err)
 	}
 	srcCAS := filepath.Join(dataDir, "cas")
 
 	var refs []Ref
 	var notes []string
-	for _, e := range offers {
-		raw, err := os.ReadFile(filepath.Join(dataDir, "offers", e.Name()))
-		if err != nil || len(raw) != 64 {
-			notes = append(notes, fmt.Sprintf("offer %s unreadable; skipped", e.Name()))
+	for _, e := range entries {
+		encoded, err := os.ReadFile(filepath.Join(receiptDir, e.Name()))
+		if err != nil {
 			continue
 		}
-		var manifestDigest [32]byte
-		copy(manifestDigest[:], raw[:32])
+		r, err := format.ParseReceipt(encoded)
+		if err != nil {
+			notes = append(notes, fmt.Sprintf("receipt %s: parse: %v; skipped", e.Name(), err))
+			continue
+		}
+
+		// The manifest is the second-to-last stored object (members, manifest,
+		// signature — see intake.go Commit).
+		if len(r.StoredObjectIDs) < 2 {
+			notes = append(notes, fmt.Sprintf("receipt %s: no stored objects; skipped", e.Name()))
+			continue
+		}
+		manifestDigest, err := objectIDToDigest(r.StoredObjectIDs[len(r.StoredObjectIDs)-2])
+		if err != nil {
+			notes = append(notes, fmt.Sprintf("receipt %s: bad manifest object id: %v; skipped", e.Name(), err))
+			continue
+		}
 
 		if err := copyObject(dst, srcCAS, manifestDigest); err != nil {
-			notes = append(notes, fmt.Sprintf("offer %s: manifest: %v; skipped", e.Name(), err))
+			notes = append(notes, fmt.Sprintf("receipt %s: manifest: %v; skipped", e.Name(), err))
 			continue
 		}
 		mb, err := dst.GetVerified(manifestDigest)
 		if err != nil {
-			notes = append(notes, fmt.Sprintf("offer %s: %v; skipped", e.Name(), err))
+			notes = append(notes, fmt.Sprintf("receipt %s: %v; skipped", e.Name(), err))
 			continue
 		}
 		m, err := format.ParseManifest(mb)
 		if err != nil {
-			notes = append(notes, fmt.Sprintf("offer %s: parse manifest: %v; skipped", e.Name(), err))
-			continue
-		}
-
-		receipt := filepath.Join(dataDir, "receipts", hex.EncodeToString(m.ContentRoot[:])+".cbor")
-		if _, err := os.Stat(receipt); err != nil {
-			notes = append(notes, fmt.Sprintf("offer %s has no receipt; not committed, skipped", e.Name()))
+			notes = append(notes, fmt.Sprintf("receipt %s: parse manifest: %v; skipped", e.Name(), err))
 			continue
 		}
 
@@ -169,6 +181,22 @@ func snapshotServer(dst *cas.Store, dataDir string) ([]Ref, []string, error) {
 		refs = append(refs, Ref{ContentRoot: m.ContentRoot, ManifestDigest: manifestDigest, Origin: "server"})
 	}
 	return refs, notes, nil
+}
+
+// objectIDToDigest extracts the SHA-256 digest from a CAS object ID
+// (format: "cas/XX/XXXX...").
+func objectIDToDigest(id string) ([32]byte, error) {
+	var d [32]byte
+	parts := strings.SplitN(id, "/", 3)
+	if len(parts) != 3 || parts[0] != "cas" {
+		return d, fmt.Errorf("malformed object id %q", id)
+	}
+	b, err := hex.DecodeString(parts[2])
+	if err != nil || len(b) != 32 {
+		return d, fmt.Errorf("bad digest in object id %q", id)
+	}
+	copy(d[:], b)
+	return d, nil
 }
 
 // snapshotSD reads sealed v2 bundles from <sdRoot>/bundles.
