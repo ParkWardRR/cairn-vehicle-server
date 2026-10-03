@@ -90,6 +90,9 @@ type Manifest struct {
 	RecoveryState      RecoveryState
 	DiscardedTailBytes uint32
 	SignatureAlgorithm string
+
+	HasTripSeq bool
+	TripSeq    uint32
 }
 
 // Manifest CBOR keys. Integer keys keep the encoding compact and unambiguous.
@@ -116,8 +119,10 @@ const (
 	keyRecoveryState   = 20
 	keyDiscardedTail   = 21
 	keySignatureAlgo   = 22
+	keyTripSeq         = 23
 
-	manifestFieldCount = 22
+	manifestFieldCountBase = 22
+	manifestFieldCountMax  = 23
 )
 
 var (
@@ -140,7 +145,11 @@ func (m *Manifest) MarshalCBOR() ([]byte, error) {
 	}
 
 	e := &cborEncoder{}
-	e.mapHeader(manifestFieldCount)
+	fieldCount := manifestFieldCountBase
+	if m.HasTripSeq {
+		fieldCount = manifestFieldCountMax
+	}
+	e.mapHeader(fieldCount)
 
 	e.key(keyManifestVersion)
 	e.uint(uint64(m.ManifestVersion))
@@ -225,6 +234,11 @@ func (m *Manifest) MarshalCBOR() ([]byte, error) {
 	e.key(keySignatureAlgo)
 	e.text(m.SignatureAlgorithm)
 
+	if m.HasTripSeq {
+		e.key(keyTripSeq)
+		e.uint(uint64(m.TripSeq))
+	}
+
 	return e.buf, nil
 }
 
@@ -259,8 +273,9 @@ func decodeManifest(b []byte) (*Manifest, error) {
 	if err != nil {
 		return nil, fmt.Errorf("manifest map header: %w", err)
 	}
-	if n != manifestFieldCount {
-		return nil, fmt.Errorf("manifest has %d fields, expected %d", n, manifestFieldCount)
+	if n != manifestFieldCountBase && n != manifestFieldCountMax {
+		return nil, fmt.Errorf("manifest has %d fields, expected %d or %d",
+			n, manifestFieldCountBase, manifestFieldCountMax)
 	}
 
 	m := &Manifest{}
@@ -378,6 +393,11 @@ func decodeManifest(b []byte) (*Manifest, error) {
 			if m.SignatureAlgorithm != SignatureAlgorithmEd25519 {
 				return nil, fmt.Errorf("unsupported signature algorithm %q", m.SignatureAlgorithm)
 			}
+		case keyTripSeq:
+			if m.TripSeq, err = d.uint32(); err != nil {
+				return nil, fmt.Errorf("trip_seq: %w", err)
+			}
+			m.HasTripSeq = true
 		default:
 			return nil, fmt.Errorf("unknown manifest key %d", key)
 		}

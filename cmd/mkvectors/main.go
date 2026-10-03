@@ -815,6 +815,9 @@ func sampleManifest() (*format.Manifest, error) {
 		RecoveryState:      format.RecoveryClean,
 		DiscardedTailBytes: 0,
 		SignatureAlgorithm: format.SignatureAlgorithmEd25519,
+
+		HasTripSeq: true,
+		TripSeq:    42,
 	}, nil
 }
 
