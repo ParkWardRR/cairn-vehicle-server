@@ -5,10 +5,9 @@
 //
 // It exists so the web UI can be run and photographed (see docs/screenshots)
 // without a real capture. Everything here is invented: a fictional owner of a
-// turbocharged car who lives in Carmel-by-the-Sea, California, and spends five
-// weeks commuting to Monterey, shopping at Crossroads and driving Highway 1 to
-// Big Sur. The roads are real, the drives are not. The device id and every hash
-// are derived from fixed strings.
+// turbocharged car who lives in Carmel-by-the-Sea, California, and spends two
+// weeks on errands in and around town. The roads are real, the drives are not.
+// The device id and every hash are derived from fixed strings.
 //
 // The schema, views and read-only lockdown are the production ones
 // (tsdb.BuildSynthetic); only the rows are made up.
@@ -42,43 +41,21 @@ type outing struct {
 	style   string // overrides the template's when set
 }
 
-var schedule = func() []outing {
-	var s []outing
-	// Hybrid commute: Tuesdays and Thursdays to an office in Monterey.
-	for _, d := range []int{2, 4, 9, 11, 16, 18, 23, 25, 30, 32} {
-		s = append(s, outing{d, 7, 50 + d%7, "commute", ""})
-	}
-	s = append(s,
-		outing{0, 7, 15, "crossroads", ""},
-		outing{0, 9, 0, "bixby", ""},
-		outing{1, 16, 40, "ptlobos", ""},
-		outing{3, 18, 5, "crossroads", ""},
-		outing{5, 7, 30, "seventeen", ""},
-		outing{6, 10, 20, "valley", ""},
-		outing{7, 9, 40, "salinas", ""},
-		outing{8, 17, 50, "crossroads", ""},
-		outing{10, 14, 15, "garrapata", ""},
-		outing{12, 16, 30, "seventeen", ""},
-		outing{13, 9, 25, "bixby", ""},
-		outing{14, 11, 0, "crossroads", ""},
-		outing{14, 12, 30, "cannery", ""},
-		outing{15, 17, 45, "valley", "brisk"},
-		outing{17, 18, 20, "crossroads", ""},
-		outing{19, 8, 30, "ptlobos", ""},
-		outing{20, 10, 5, "salinas", ""},
-		outing{21, 8, 50, "pfeiffer", ""},
-		outing{22, 12, 10, "cannery", ""},
-		outing{24, 17, 30, "crossroads", ""},
-		outing{26, 15, 45, "pgrove", ""},
-		outing{27, 9, 15, "valley", ""},
-		outing{28, 10, 30, "garrapata", "calm"},
-		outing{29, 17, 15, "crossroads", ""},
-		outing{31, 16, 0, "pgrove", ""},
-		outing{33, 9, 10, "salinas", ""},
-		outing{34, 8, 45, "bixby", ""},
-	)
-	return s
-}()
+var schedule = []outing{
+	{0, 7, 15, "crossroads", ""},
+	{0, 9, 15, "valley", ""},
+	{1, 16, 40, "ptlobos", ""},
+	{2, 17, 30, "town", ""},
+	{3, 7, 45, "seventeen", ""},
+	{4, 18, 5, "crossroads", ""},
+	{5, 10, 20, "mission", ""},
+	{6, 10, 0, "valley", "brisk"},
+	{8, 12, 10, "town", ""},
+	{9, 8, 30, "ptlobos", ""},
+	{10, 17, 50, "crossroads", ""},
+	{11, 16, 0, "seventeen", ""},
+	{13, 9, 40, "mission", ""},
+}
 
 const pdt = -7 * time.Hour
 

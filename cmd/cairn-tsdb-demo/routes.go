@@ -18,26 +18,22 @@ type place struct {
 	altM     float64
 }
 
-// The scenario is a fictional owner who lives in Carmel-by-the-Sea, California
-// and drives around the Monterey Peninsula and up and down Highway 1. Every
-// coordinate is a public landmark; none of it is anyone's real address.
+// The scenario is a fictional owner who lives in Carmel-by-the-Sea, Monterey
+// County, California and stays within a few miles of home: downtown, the beach,
+// the Mission, Crossroads, Point Lobos, Pebble Beach and Carmel Valley Road.
+// Every coordinate is a public landmark; none of it is anyone's real address.
 var places = map[string]place{
-	"home":       {36.5589, -121.9205, 62},
+	"home":       {36.5611, -121.9163, 55},
+	"oceanave":   {36.5553, -121.9227, 30},
+	"beach":      {36.5547, -121.9300, 3},
+	"mission":    {36.5399, -121.9199, 20},
+	"riverbeach": {36.5361, -121.9300, 3},
 	"crossroads": {36.5398, -121.9101, 30},
-	"office":     {36.5981, -121.8946, 40},
-	"cannery":    {36.6152, -121.8993, 5},
-	"wharf":      {36.6033, -121.8933, 3},
-	"lighthouse": {36.6384, -121.9334, 10},
-	"spanish":    {36.6120, -121.9490, 10},
-	"pebble":     {36.5675, -121.9500, 80},
 	"ptlobos":    {36.5214, -121.9383, 20},
-	"village":    {36.4796, -121.7289, 120},
-	"lagunaseca": {36.5840, -121.7540, 190},
-	"salinas":    {36.6743, -121.6560, 17},
-	"garrapata":  {36.4465, -121.9230, 50},
-	"bixby":      {36.3715, -121.9019, 75},
-	"nepenthe":   {36.2706, -121.8076, 270},
-	"pfeiffer":   {36.2495, -121.7878, 60},
+	"pebble":     {36.5675, -121.9500, 80},
+	"spanish":    {36.6120, -121.9490, 10},
+	"quail":      {36.5446, -121.8905, 60},
+	"valleyrd":   {36.5300, -121.8570, 90},
 }
 
 // template is one kind of outing. A round trip becomes two boots: the car is
@@ -47,22 +43,17 @@ type template struct {
 	via       []string
 	style     string // calm | brisk | spirited
 	roundTrip bool
-	ripple    float64 // extra altitude wobble, metres, for coastal-cliff roads
+	ripple    float64 // extra altitude wobble, metres
 	dwellMin  [2]int  // minutes parked at the far end
 }
 
 var templates = map[string]*template{
-	"commute":    {name: "commute", via: []string{"home", "office"}, style: "calm", roundTrip: true, dwellMin: [2]int{480, 540}},
+	"town":       {name: "town", via: []string{"home", "oceanave", "beach", "mission"}, style: "calm", roundTrip: true, dwellMin: [2]int{40, 90}},
+	"mission":    {name: "mission", via: []string{"home", "mission", "riverbeach"}, style: "calm", roundTrip: true, dwellMin: [2]int{45, 80}},
 	"crossroads": {name: "crossroads", via: []string{"home", "crossroads"}, style: "calm", roundTrip: true, dwellMin: [2]int{25, 55}},
-	"cannery":    {name: "cannery", via: []string{"home", "cannery", "wharf"}, style: "calm", roundTrip: true, dwellMin: [2]int{60, 100}},
 	"ptlobos":    {name: "ptlobos", via: []string{"home", "ptlobos"}, style: "calm", roundTrip: true, dwellMin: [2]int{70, 120}},
-	"seventeen":  {name: "seventeen", via: []string{"home", "pebble", "spanish", "lighthouse", "home"}, style: "calm"},
-	"pgrove":     {name: "pgrove", via: []string{"home", "lighthouse", "wharf", "home"}, style: "brisk"},
-	"valley":     {name: "valley", via: []string{"home", "village"}, style: "spirited", roundTrip: true, dwellMin: [2]int{45, 80}},
-	"salinas":    {name: "salinas", via: []string{"home", "lagunaseca", "salinas"}, style: "brisk", roundTrip: true, dwellMin: [2]int{60, 150}},
-	"garrapata":  {name: "garrapata", via: []string{"home", "garrapata"}, style: "brisk", roundTrip: true, ripple: 18, dwellMin: [2]int{40, 70}},
-	"bixby":      {name: "bixby", via: []string{"home", "bixby", "nepenthe"}, style: "spirited", roundTrip: true, ripple: 30, dwellMin: [2]int{45, 90}},
-	"pfeiffer":   {name: "pfeiffer", via: []string{"home", "bixby", "nepenthe", "pfeiffer"}, style: "brisk", roundTrip: true, ripple: 30, dwellMin: [2]int{60, 110}},
+	"seventeen":  {name: "seventeen", via: []string{"home", "pebble", "spanish", "home"}, style: "brisk", ripple: 6},
+	"valley":     {name: "valley", via: []string{"home", "quail", "valleyrd"}, style: "spirited", roundTrip: true, ripple: 8, dwellMin: [2]int{40, 75}},
 }
 
 // route is a road-following polyline with the router's free-flow speed for each
