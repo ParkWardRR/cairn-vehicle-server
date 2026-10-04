@@ -42,7 +42,9 @@ import (
 //
 // It is recorded with every decode run, so a change is visible as a second row
 // at a higher version and the two outputs can be compared bundle by bundle.
-const Version = 1
+//
+// Version 2 adds the GNSS jump gate and lowers the reported-speed cap.
+const Version = 2
 
 // Result is what one decode produced.
 type Result struct {
@@ -365,6 +367,11 @@ func (d *Decoder) Decode(ctx context.Context, in Input) (*Result, error) {
 		return nil, err
 	}
 
+	// Position fixes are gated against their neighbours here because the check
+	// needs the ordered series, which a single frame cannot see.
+	res.sortBySeq()
+	res.Positions, _ = gateJumps(res.Positions, res.Gaps)
+
 	// A bundle recovered from a torn tail is still decoded; the recovery state
 	// travels with the trip so a consumer can see it was not a clean capture.
 	res.deriveTrip(uint8(manifest.RecoveryState))
@@ -592,7 +599,7 @@ func newPosition(manifest *format.Manifest, f *format.Frame, s *format.GNSSSampl
 		return Position{}, false
 	}
 	speed := s.SpeedMPS()
-	if speed > 67 {
+	if speed > maxFixSpeedMPS {
 		return Position{}, false
 	}
 
