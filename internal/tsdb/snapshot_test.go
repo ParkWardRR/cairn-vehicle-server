@@ -3,6 +3,7 @@ package tsdb
 import (
 	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -202,5 +203,99 @@ func TestSnapshotMetadataConsistent(t *testing.T) {
 		if count2 := meta2.RowCounts[table]; count1 != count2 {
 			t.Errorf("row count %s: %d vs %d", table, count1, count2)
 		}
+	}
+}
+
+func TestSnapshotFormats(t *testing.T) {
+	b, err := testbundle.Build(testbundle.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sd := t.TempDir()
+	writeSD(t, sd, b, "b1")
+	db := buildFromSD(t, sd)
+
+	// All three formats should produce valid archives with the same manifest.
+	for _, tc := range []struct {
+		format      string
+		contentType string
+	}{
+		{"zstd", "application/x-tar+zstd"},
+		{"gzip", "application/x-tar+gzip"},
+		{"tar", "application/x-tar"},
+	} {
+		t.Run(tc.format, func(t *testing.T) {
+			data, ct, digest, meta := db.SnapshotFormat(tc.format)
+			if data == nil {
+				t.Fatal("data nil")
+			}
+			if ct != tc.contentType {
+				t.Errorf("content type = %q, want %q", ct, tc.contentType)
+			}
+			if !strings.HasPrefix(digest, "sha256:") {
+				t.Errorf("digest = %q, want sha256:... prefix", digest)
+			}
+			if meta == nil {
+				t.Fatal("meta nil")
+			}
+
+			var tarReader *tar.Reader
+			switch tc.format {
+			case "zstd":
+				zr, err := zstd.NewReader(bytes.NewReader(data))
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer zr.Close()
+				tarReader = tar.NewReader(zr)
+			case "gzip":
+				gr, err := gzip.NewReader(bytes.NewReader(data))
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer gr.Close()
+				tarReader = tar.NewReader(gr)
+			case "tar":
+				tarReader = tar.NewReader(bytes.NewReader(data))
+			}
+
+			var hasManifest bool
+			tables := map[string]bool{}
+			for {
+				hdr, err := tarReader.Next()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					t.Fatalf("tar read: %v", err)
+				}
+				name := strings.TrimPrefix(hdr.Name, "snapshot/")
+				if name == "manifest.json" {
+					hasManifest = true
+				}
+				if strings.HasSuffix(name, ".parquet") {
+					tables[strings.TrimSuffix(name, ".parquet")] = true
+				}
+			}
+			if !hasManifest {
+				t.Error("manifest.json missing")
+			}
+			for _, tbl := range meta.Tables {
+				if !tables[tbl] {
+					t.Errorf("%s.parquet missing", tbl)
+				}
+			}
+		})
+	}
+
+	// Digests must differ across formats.
+	_, _, dZstd, _ := db.SnapshotFormat("zstd")
+	_, _, dGzip, _ := db.SnapshotFormat("gzip")
+	_, _, dTar, _ := db.SnapshotFormat("tar")
+	if dZstd == dGzip {
+		t.Error("zstd and gzip digests should differ")
+	}
+	if dZstd == dTar {
+		t.Error("zstd and tar digests should differ")
 	}
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"io"
 	"log/slog"
@@ -231,6 +232,126 @@ func TestSnapshotHandler(t *testing.T) {
 			if len(content) < 4 || string(content[:4]) != "PAR1" {
 				t.Errorf("%s does not start with PAR1 magic (got %x)", name, content[:min(4, len(content))])
 			}
+		}
+	})
+
+	t.Run("format_gzip", func(t *testing.T) {
+		resp, err := http.Get(srv.URL + "/snapshot?format=gzip")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != 200 {
+			t.Fatalf("status = %d", resp.StatusCode)
+		}
+		if ct := resp.Header.Get("Content-Type"); ct != "application/x-tar+gzip" {
+			t.Errorf("Content-Type = %q, want application/x-tar+gzip", ct)
+		}
+
+		body, _ := io.ReadAll(resp.Body)
+		gr, err := gzip.NewReader(bytes.NewReader(body))
+		if err != nil {
+			t.Fatalf("gzip decompress: %v", err)
+		}
+		defer gr.Close()
+
+		tr := tar.NewReader(gr)
+		var found bool
+		for {
+			hdr, err := tr.Next()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Fatalf("tar: %v", err)
+			}
+			if strings.HasSuffix(hdr.Name, "manifest.json") {
+				found = true
+			}
+		}
+		if !found {
+			t.Error("manifest.json missing from gzip archive")
+		}
+	})
+
+	t.Run("format_tar", func(t *testing.T) {
+		resp, err := http.Get(srv.URL + "/snapshot?format=tar")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != 200 {
+			t.Fatalf("status = %d", resp.StatusCode)
+		}
+		if ct := resp.Header.Get("Content-Type"); ct != "application/x-tar" {
+			t.Errorf("Content-Type = %q, want application/x-tar", ct)
+		}
+
+		body, _ := io.ReadAll(resp.Body)
+		tr := tar.NewReader(bytes.NewReader(body))
+		var found bool
+		for {
+			hdr, err := tr.Next()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Fatalf("tar: %v", err)
+			}
+			if strings.HasSuffix(hdr.Name, "manifest.json") {
+				found = true
+			}
+		}
+		if !found {
+			t.Error("manifest.json missing from tar archive")
+		}
+	})
+
+	t.Run("format_etags_differ", func(t *testing.T) {
+		etags := map[string]string{}
+		for _, f := range []string{"zstd", "gzip", "tar"} {
+			resp, err := http.Get(srv.URL + "/snapshot?format=" + f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			etags[f] = resp.Header.Get("ETag")
+		}
+		if etags["zstd"] == etags["gzip"] {
+			t.Error("zstd and gzip ETags should differ")
+		}
+		if etags["zstd"] == etags["tar"] {
+			t.Error("zstd and tar ETags should differ")
+		}
+		if etags["gzip"] == etags["tar"] {
+			t.Error("gzip and tar ETags should differ")
+		}
+	})
+
+	t.Run("304_per_format", func(t *testing.T) {
+		resp1, _ := http.Get(srv.URL + "/snapshot?format=gzip")
+		io.Copy(io.Discard, resp1.Body)
+		resp1.Body.Close()
+		gzipEtag := resp1.Header.Get("ETag")
+
+		req, _ := http.NewRequest("GET", srv.URL+"/snapshot?format=gzip", nil)
+		req.Header.Set("If-None-Match", gzipEtag)
+		resp2, _ := http.DefaultClient.Do(req)
+		resp2.Body.Close()
+		if resp2.StatusCode != 304 {
+			t.Errorf("same-format ETag: got %d, want 304", resp2.StatusCode)
+		}
+
+		req2, _ := http.NewRequest("GET", srv.URL+"/snapshot?format=zstd", nil)
+		req2.Header.Set("If-None-Match", gzipEtag)
+		resp3, _ := http.DefaultClient.Do(req2)
+		io.Copy(io.Discard, resp3.Body)
+		resp3.Body.Close()
+		if resp3.StatusCode == 304 {
+			t.Error("cross-format ETag should not 304")
 		}
 	})
 }

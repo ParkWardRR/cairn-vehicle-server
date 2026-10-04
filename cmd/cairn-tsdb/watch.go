@@ -139,9 +139,19 @@ func (s *server) metrics(w http.ResponseWriter, _ *http.Request) {
 	if snapData != nil {
 		snapSize = len(snapData)
 	}
-	g("cairn_tsdb_snapshot_bytes", "Compressed snapshot archive size.", snapSize)
+	g("cairn_tsdb_snapshot_bytes", "Compressed snapshot archive size (zstd).", snapSize)
 	if snapMeta != nil {
 		g("cairn_tsdb_snapshot_tables", "Number of tables in the snapshot.", len(snapMeta.Tables))
+	}
+
+	fmt.Fprintf(w, "# HELP cairn_tsdb_snapshot_format_bytes Snapshot archive size by format.\n# TYPE cairn_tsdb_snapshot_format_bytes gauge\n")
+	for _, f := range tsdb.SnapshotFormatNames() {
+		data, _, _, _ := s.cur.Load().SnapshotFormat(f)
+		sz := 0
+		if data != nil {
+			sz = len(data)
+		}
+		fmt.Fprintf(w, "cairn_tsdb_snapshot_format_bytes{format=%q} %d\n", f, sz)
 	}
 }
 

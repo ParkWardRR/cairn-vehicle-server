@@ -284,19 +284,24 @@ func (s *server) rebuild(ctx context.Context) (*tsdb.DB, error) {
 }
 
 func (s *server) snapshotHandler(w http.ResponseWriter, r *http.Request) {
-	data, meta := s.cur.Load().Snapshot()
+	format := r.URL.Query().Get("format")
+	if format == "" {
+		format = "zstd"
+	}
+
+	data, contentType, digest, meta := s.cur.Load().SnapshotFormat(format)
 	if data == nil {
 		http.Error(w, "no snapshot available", http.StatusServiceUnavailable)
 		return
 	}
 
-	etag := `"` + meta.ContentDigest + `"`
+	etag := `"` + digest + `"`
 	if r.Header.Get("If-None-Match") == etag {
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/x-tar+zstd")
+	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
 	w.Header().Set("ETag", etag)
 	w.Header().Set("Last-Modified", meta.BuiltAt.UTC().Format(http.TimeFormat))

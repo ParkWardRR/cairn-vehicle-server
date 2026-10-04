@@ -45,10 +45,9 @@ type Options struct {
 
 // DB is a built, locked, queryable store.
 type DB struct {
-	db           *sql.DB
-	Report       Report
-	snapshot     []byte
-	snapshotMeta *SnapshotMeta
+	db              *sql.DB
+	Report          Report
+	snapshotFormats *SnapshotFormats
 }
 
 // BundleReport is the reproducibility record for one loaded bundle.
@@ -146,10 +145,9 @@ func Build(ctx context.Context, snap *Snapshot, notes []string, opts Options) (*
 	}
 
 	// Export snapshot before lockdown — COPY TO needs external access enabled.
-	var snapBytes []byte
-	var snapMeta *SnapshotMeta
+	var sf *SnapshotFormats
 	if len(report.Bundles) > 0 {
-		snapBytes, snapMeta, err = exportSnapshot(ctx, sdb, &report)
+		sf, err = exportSnapshot(ctx, sdb, &report)
 		if err != nil {
 			return fail(fmt.Errorf("snapshot: %w", err))
 		}
@@ -166,10 +164,10 @@ func Build(ctx context.Context, snap *Snapshot, notes []string, opts Options) (*
 	}
 
 	report.BuildMS = time.Since(started).Milliseconds()
-	if snapMeta != nil {
-		snapMeta.BuildMS = report.BuildMS
+	if sf != nil {
+		sf.Meta.BuildMS = report.BuildMS
 	}
-	return &DB{db: sdb, Report: report, snapshot: snapBytes, snapshotMeta: snapMeta}, nil
+	return &DB{db: sdb, Report: report, snapshotFormats: sf}, nil
 }
 
 // Close releases the database.

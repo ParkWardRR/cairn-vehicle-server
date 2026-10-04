@@ -2,6 +2,8 @@ package tsdb
 
 import (
 	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -39,20 +41,52 @@ var snapshotTables = []string{
 	"status", "transition", "gap",
 }
 
-// Snapshot returns the cached snapshot archive bytes and metadata. Both are
-// nil when the build produced no snapshot (e.g. zero bundles, or the export
-// was skipped).
-func (d *DB) Snapshot() ([]byte, *SnapshotMeta) {
-	return d.snapshot, d.snapshotMeta
+// SnapshotFormats holds the snapshot archive in multiple compression formats,
+// cached in memory and atomically swapped on rebuild.
+type SnapshotFormats struct {
+	Zstd    []byte
+	Gzip    []byte
+	Tar     []byte
+	Meta    *SnapshotMeta
+	Digests map[string]string // format key → "sha256:..."
 }
 
+// Snapshot returns the default (zstd) format for backward compatibility.
+func (d *DB) Snapshot() ([]byte, *SnapshotMeta) {
+	if d.snapshotFormats == nil {
+		return nil, nil
+	}
+	return d.snapshotFormats.Zstd, d.snapshotFormats.Meta
+}
+
+// SnapshotFormat returns the snapshot in the requested format.
+// Returns nil data when no snapshot exists or the format is unknown.
+func (d *DB) SnapshotFormat(format string) (data []byte, contentType string, digest string, meta *SnapshotMeta) {
+	sf := d.snapshotFormats
+	if sf == nil {
+		return nil, "", "", nil
+	}
+	switch format {
+	case "gzip", "gz":
+		return sf.Gzip, "application/x-tar+gzip", sf.Digests["gzip"], sf.Meta
+	case "tar":
+		return sf.Tar, "application/x-tar", sf.Digests["tar"], sf.Meta
+	default:
+		return sf.Zstd, "application/x-tar+zstd", sf.Digests["zstd"], sf.Meta
+	}
+}
+
+// SnapshotFormatNames returns the supported format keys.
+func SnapshotFormatNames() []string { return []string{"zstd", "gzip", "tar"} }
+
 // exportSnapshot writes every table to Parquet in a temp directory,
-// materialises v_drive_summary, builds a tar.zst archive and returns it with
-// its metadata. Called during Build() before the DuckDB lockdown.
-func exportSnapshot(ctx context.Context, sdb *sql.DB, report *Report) ([]byte, *SnapshotMeta, error) {
+// materialises v_drive_summary, builds the archive in multiple compression
+// formats and returns them with shared metadata. Called during Build() before
+// the DuckDB lockdown.
+func exportSnapshot(ctx context.Context, sdb *sql.DB, report *Report) (*SnapshotFormats, error) {
 	dir, err := os.MkdirTemp("", "cairn-snapshot-")
 	if err != nil {
-		return nil, nil, fmt.Errorf("snapshot tmpdir: %w", err)
+		return nil, fmt.Errorf("snapshot tmpdir: %w", err)
 	}
 	defer os.RemoveAll(dir)
 
@@ -63,7 +97,7 @@ func exportSnapshot(ctx context.Context, sdb *sql.DB, report *Report) ([]byte, *
 	// Materialise v_drive_summary as a real table for export, then drop it
 	// afterwards so the view definition can be created normally.
 	if _, err := sdb.ExecContext(ctx, "CREATE TABLE drive_summary AS SELECT * FROM v_drive_summary"); err != nil {
-		return nil, nil, fmt.Errorf("materialise drive_summary: %w", err)
+		return nil, fmt.Errorf("materialise drive_summary: %w", err)
 	}
 	defer sdb.ExecContext(ctx, "DROP TABLE IF EXISTS drive_summary")
 
@@ -72,13 +106,13 @@ func exportSnapshot(ctx context.Context, sdb *sql.DB, report *Report) ([]byte, *
 		path := filepath.Join(dir, t+".parquet")
 		q := fmt.Sprintf("COPY %s TO '%s' (FORMAT PARQUET, COMPRESSION ZSTD)", t, path)
 		if _, err := sdb.ExecContext(ctx, q); err != nil {
-			return nil, nil, fmt.Errorf("export %s: %w", t, err)
+			return nil, fmt.Errorf("export %s: %w", t, err)
 		}
 
 		var n int
 		row := sdb.QueryRowContext(ctx, fmt.Sprintf("SELECT count(*) FROM %s", t))
 		if err := row.Scan(&n); err != nil {
-			return nil, nil, fmt.Errorf("count %s: %w", t, err)
+			return nil, fmt.Errorf("count %s: %w", t, err)
 		}
 		rowCounts[t] = n
 	}
@@ -95,43 +129,45 @@ func exportSnapshot(ctx context.Context, sdb *sql.DB, report *Report) ([]byte, *
 
 	metaJSON, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
-		return nil, nil, fmt.Errorf("encode manifest: %w", err)
-	}
-	metaPath := filepath.Join(dir, "manifest.json")
-	if err := os.WriteFile(metaPath, metaJSON, 0o644); err != nil {
-		return nil, nil, fmt.Errorf("write manifest: %w", err)
+		return nil, fmt.Errorf("encode manifest: %w", err)
 	}
 
-	archive, err := buildTarZstd(dir, tables, metaJSON)
+	tarBytes, err := buildTar(dir, tables, metaJSON)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	digest := sha256.Sum256(archive)
-	meta.CompressedSize = len(archive)
-	meta.ContentDigest = "sha256:" + hex.EncodeToString(digest[:])
+	zstdBytes, err := compressZstd(tarBytes)
+	if err != nil {
+		return nil, fmt.Errorf("zstd compress: %w", err)
+	}
 
-	return archive, meta, nil
+	gzipBytes, err := compressGzip(tarBytes)
+	if err != nil {
+		return nil, fmt.Errorf("gzip compress: %w", err)
+	}
+
+	digests := map[string]string{
+		"zstd": sha256hex(zstdBytes),
+		"gzip": sha256hex(gzipBytes),
+		"tar":  sha256hex(tarBytes),
+	}
+
+	meta.CompressedSize = len(zstdBytes)
+	meta.ContentDigest = digests["zstd"]
+
+	return &SnapshotFormats{
+		Zstd:    zstdBytes,
+		Gzip:    gzipBytes,
+		Tar:     tarBytes,
+		Meta:    meta,
+		Digests: digests,
+	}, nil
 }
 
-// buildTarZstd creates a tar.zst archive from the Parquet files and manifest.
-func buildTarZstd(dir string, tables []string, manifestJSON []byte) ([]byte, error) {
-	// Write the tar.zst to a temp file to avoid holding everything in memory
-	// during compression, then read it back. At current data volumes this is
-	// negligible either way.
-	f, err := os.CreateTemp("", "cairn-snapshot-*.tar.zst")
-	if err != nil {
-		return nil, fmt.Errorf("snapshot temp file: %w", err)
-	}
-	tmpPath := f.Name()
-	defer os.Remove(tmpPath)
-
-	zw, err := zstd.NewWriter(f, zstd.WithEncoderLevel(zstd.SpeedDefault))
-	if err != nil {
-		f.Close()
-		return nil, fmt.Errorf("zstd writer: %w", err)
-	}
-	tw := tar.NewWriter(zw)
+func buildTar(dir string, tables []string, manifestJSON []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
 
 	addFile := func(name string, data []byte) error {
 		hdr := &tar.Header{
@@ -143,47 +179,58 @@ func buildTarZstd(dir string, tables []string, manifestJSON []byte) ([]byte, err
 		if err := tw.WriteHeader(hdr); err != nil {
 			return fmt.Errorf("tar header %s: %w", name, err)
 		}
-		if _, err := tw.Write(data); err != nil {
-			return fmt.Errorf("tar write %s: %w", name, err)
-		}
-		return nil
+		_, err := tw.Write(data)
+		return err
 	}
 
 	if err := addFile("manifest.json", manifestJSON); err != nil {
-		tw.Close()
-		zw.Close()
-		f.Close()
 		return nil, err
 	}
-
 	for _, t := range tables {
 		data, err := os.ReadFile(filepath.Join(dir, t+".parquet"))
 		if err != nil {
-			tw.Close()
-			zw.Close()
-			f.Close()
 			return nil, fmt.Errorf("read %s.parquet: %w", t, err)
 		}
 		if err := addFile(t+".parquet", data); err != nil {
-			tw.Close()
-			zw.Close()
-			f.Close()
 			return nil, err
 		}
 	}
-
 	if err := tw.Close(); err != nil {
-		zw.Close()
-		f.Close()
 		return nil, fmt.Errorf("tar close: %w", err)
 	}
-	if err := zw.Close(); err != nil {
-		f.Close()
-		return nil, fmt.Errorf("zstd close: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		return nil, fmt.Errorf("snapshot file close: %w", err)
-	}
+	return buf.Bytes(), nil
+}
 
-	return os.ReadFile(tmpPath)
+func compressZstd(data []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	zw, err := zstd.NewWriter(&buf, zstd.WithEncoderLevel(zstd.SpeedDefault))
+	if err != nil {
+		return nil, err
+	}
+	if _, err := zw.Write(data); err != nil {
+		zw.Close()
+		return nil, err
+	}
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func compressGzip(data []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	if _, err := gw.Write(data); err != nil {
+		gw.Close()
+		return nil, err
+	}
+	if err := gw.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func sha256hex(data []byte) string {
+	d := sha256.Sum256(data)
+	return "sha256:" + hex.EncodeToString(d[:])
 }
