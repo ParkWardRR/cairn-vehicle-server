@@ -111,6 +111,15 @@ var sampleTables = []string{"position", "imu", "obd", "boost", "status", "transi
 // join always finds *something*, so how stale it is has to travel with the row,
 // and a consumer that wants only fresh readings filters on the age.
 const viewsSQL = `
+-- Quality-filtered position: rejects zero-fixes, impossible speeds (>150 mph)
+-- and poor geometry (HDOP >= 15). Every UI query uses this instead of the raw
+-- position table so a single forgotten WHERE clause cannot leak phantoms.
+CREATE VIEW v_position AS
+SELECT * FROM position
+WHERE lat != 0 AND lon != 0
+  AND speed_mps < 67
+  AND (hdop IS NULL OR hdop < 15);
+
 CREATE VIEW v_telemetry AS
 SELECT
     o.boot_id, o.mono_ms, o.observed_at,
@@ -123,7 +132,7 @@ SELECT
     (o.mono_ms - p.mono_ms) AS gnss_age_ms
 FROM obd o
 ASOF LEFT JOIN boost b    ON o.boot_id = b.boot_id AND o.mono_ms >= b.mono_ms
-ASOF LEFT JOIN position p ON o.boot_id = p.boot_id AND o.mono_ms >= p.mono_ms
+ASOF LEFT JOIN v_position p ON o.boot_id = p.boot_id AND o.mono_ms >= p.mono_ms
     AND coalesce(p.source_flags, 0) & 32 = 0;
 
 CREATE VIEW v_reproducibility AS
@@ -271,7 +280,7 @@ SELECT
          ELSE NULL END AS ratio,
     o.mono_ms - p.mono_ms AS gnss_age_ms
 FROM obd o
-ASOF JOIN position p ON o.boot_id = p.boot_id AND o.mono_ms >= p.mono_ms
+ASOF JOIN v_position p ON o.boot_id = p.boot_id AND o.mono_ms >= p.mono_ms
     AND coalesce(p.source_flags, 0) & 32 = 0
 WHERE o.speed_kph IS NOT NULL
   AND p.speed_mps IS NOT NULL
