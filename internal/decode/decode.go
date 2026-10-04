@@ -588,7 +588,7 @@ func (r *Result) decodeFrame(manifest *format.Manifest, f *format.Frame, segment
 }
 
 func newPosition(manifest *format.Manifest, f *format.Frame, s *format.GNSSSample) (Position, bool) {
-	if !s.HasFix() {
+	if !s.HasFix() || (s.LatE7 == 0 && s.LonE7 == 0) {
 		return Position{}, false
 	}
 	speed := s.SpeedMPS()
