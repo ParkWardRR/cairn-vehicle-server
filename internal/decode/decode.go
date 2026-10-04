@@ -470,7 +470,9 @@ func (r *Result) decodeFrame(manifest *format.Manifest, f *format.Frame, segment
 			warn(err)
 			return
 		}
-		r.Positions = append(r.Positions, newPosition(manifest, f, s))
+		if p, ok := newPosition(manifest, f, s); ok {
+			r.Positions = append(r.Positions, p)
+		}
 
 	case format.RecordIMUSummary:
 		s, err := format.ParseIMUSummary(f.Payload)
@@ -585,7 +587,15 @@ func (r *Result) decodeFrame(manifest *format.Manifest, f *format.Frame, segment
 	}
 }
 
-func newPosition(manifest *format.Manifest, f *format.Frame, s *format.GNSSSample) Position {
+func newPosition(manifest *format.Manifest, f *format.Frame, s *format.GNSSSample) (Position, bool) {
+	if !s.HasFix() {
+		return Position{}, false
+	}
+	speed := s.SpeedMPS()
+	if speed > 67 {
+		return Position{}, false
+	}
+
 	p := Position{
 		Seq:         f.Seq,
 		ObservedAt:  observedAt(manifest, f.MonotonicMS, s.UTCOffsetMS),
@@ -599,17 +609,19 @@ func newPosition(manifest *format.Manifest, f *format.Frame, s *format.GNSSSampl
 
 	alt := s.AltitudeM()
 	p.AltitudeM = &alt
-	speed := s.SpeedMPS()
 	p.SpeedMPS = &speed
 	heading := s.HeadingDeg()
 	p.HeadingDeg = &heading
 
-	su := int16(s.SatsUsed)
-	p.SatsUsed = &su
-	sv := int16(s.SatsVisible)
-	p.SatsVisible = &sv
+	if s.SatsUsed != 0xFF {
+		su := int16(s.SatsUsed)
+		p.SatsUsed = &su
+	}
+	if s.SatsVisible != 0xFF {
+		sv := int16(s.SatsVisible)
+		p.SatsVisible = &sv
+	}
 
-	// Accuracy fields stay nil when the receiver did not report them.
 	if s.HDOPe2 != nil {
 		v := float64(*s.HDOPe2) / 100.0
 		p.HDOP = &v
@@ -627,7 +639,7 @@ func newPosition(manifest *format.Manifest, f *format.Frame, s *format.GNSSSampl
 		p.UTCAccMS = &v
 	}
 
-	return p
+	return p, true
 }
 
 func newOBD(manifest *format.Manifest, f *format.Frame, s *format.OBDSnapshot) OBD {
