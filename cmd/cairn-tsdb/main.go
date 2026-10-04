@@ -45,12 +45,13 @@ type config struct {
 
 func main() {
 	var (
-		cfg    config
-		addr   = flag.String("addr", "127.0.0.1:8480", "listen address; loopback by default because the data includes GNSS positions")
-		verify = flag.Bool("verify", false, "build, print the reproducibility report and exit non-zero on any problem")
-		query  = flag.String("query", "", "run one read-only statement against the built store, print JSON and exit")
-		serve  = flag.Bool("serve-unreproduced", false, "serve even when the build did not reproduce cleanly")
-		watch  = flag.Duration("watch", 0, "poll the sources this often and rebuild when a receipt or card bundle appears (0 disables)")
+		cfg      config
+		addr     = flag.String("addr", "127.0.0.1:8480", "listen address; loopback by default because the data includes GNSS positions")
+		verify   = flag.Bool("verify", false, "build, print the reproducibility report and exit non-zero on any problem")
+		query    = flag.String("query", "", "run one read-only statement against the built store, print JSON and exit")
+		snapshot = flag.String("snapshot", "", "build, write the snapshot archive to the given path (or - for stdout) and exit")
+		serve    = flag.Bool("serve-unreproduced", false, "serve even when the build did not reproduce cleanly")
+		watch    = flag.Duration("watch", 0, "poll the sources this often and rebuild when a receipt or card bundle appears (0 disables)")
 
 		certFile     = flag.String("tls-cert", "", "server certificate (PEM)")
 		keyFile      = flag.String("tls-key", "", "server private key (PEM)")
@@ -94,6 +95,24 @@ func main() {
 		}
 		printJSON(os.Stdout, res)
 		return
+
+	case *snapshot != "":
+		data, meta := db.Snapshot()
+		if data == nil {
+			log.Error("no snapshot available (zero bundles loaded)")
+			os.Exit(1)
+		}
+		if *snapshot == "-" {
+			os.Stdout.Write(data)
+		} else {
+			if err := os.WriteFile(*snapshot, data, 0o644); err != nil {
+				log.Error("write snapshot", "error", err)
+				os.Exit(1)
+			}
+			log.Info("snapshot written", "path", *snapshot, "size", len(data),
+				"bundles", meta.BundleCount, "digest", meta.ContentDigest)
+		}
+		return
 	}
 
 	if !db.Report.OK() && !*serve {
@@ -116,6 +135,7 @@ func main() {
 	mux.HandleFunc("GET /status", s.status)
 	mux.HandleFunc("POST /query", s.query)
 	mux.HandleFunc("POST /reload", s.reload)
+	mux.HandleFunc("GET /snapshot", s.snapshotHandler)
 	mux.HandleFunc("GET /metrics", s.metrics)
 
 	srv := &http.Server{
@@ -261,6 +281,27 @@ func (s *server) rebuild(ctx context.Context) (*tsdb.DB, error) {
 		time.AfterFunc(35*time.Second, func() { old.Close() })
 	}
 	return next, nil
+}
+
+func (s *server) snapshotHandler(w http.ResponseWriter, r *http.Request) {
+	data, meta := s.cur.Load().Snapshot()
+	if data == nil {
+		http.Error(w, "no snapshot available", http.StatusServiceUnavailable)
+		return
+	}
+
+	etag := `"` + meta.ContentDigest + `"`
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/x-tar+zstd")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Last-Modified", meta.BuiltAt.UTC().Format(http.TimeFormat))
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Write(data)
 }
 
 func (s *server) reload(w http.ResponseWriter, r *http.Request) {

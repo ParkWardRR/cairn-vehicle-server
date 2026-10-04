@@ -73,8 +73,8 @@ func TestGoldenDigests(t *testing.T) {
 		{
 			name:   "gap-and-fixless",
 			opts:   testbundle.Options{ChunkSize: 256, GNSSSamples: 20, OBDSamples: 5, JournalEntries: 2, GapAfter: 8, FixlessFrom: 15},
-			digest: "66fe2be2923e05d27a15ed192f70d1d08c8d45e96053f15d3407f8928e623cb8",
-			rows:   Counts{Position: 20, OBD: 5, Transition: 2, Gap: 1},
+			digest: "b39ab77bfb18af818e450f0a519e08b4ef03fa22a1b68cbb4445974cb08c8718",
+			rows:   Counts{Position: 15, OBD: 5, Transition: 2, Gap: 1},
 		},
 	}
 

@@ -133,6 +133,16 @@ func (s *server) metrics(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	g("cairn_tsdb_go_heap_bytes", "Go heap in use. DuckDB's own memory is native and is bounded by -memory and the unit's MemoryMax.", ms.HeapAlloc)
+
+	snapData, snapMeta := s.cur.Load().Snapshot()
+	snapSize := 0
+	if snapData != nil {
+		snapSize = len(snapData)
+	}
+	g("cairn_tsdb_snapshot_bytes", "Compressed snapshot archive size.", snapSize)
+	if snapMeta != nil {
+		g("cairn_tsdb_snapshot_tables", "Number of tables in the snapshot.", len(snapMeta.Tables))
+	}
 }
 
 // totals sums per-table rows across bundles.

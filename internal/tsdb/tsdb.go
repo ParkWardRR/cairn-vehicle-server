@@ -45,8 +45,10 @@ type Options struct {
 
 // DB is a built, locked, queryable store.
 type DB struct {
-	db     *sql.DB
-	Report Report
+	db           *sql.DB
+	Report       Report
+	snapshot     []byte
+	snapshotMeta *SnapshotMeta
 }
 
 // BundleReport is the reproducibility record for one loaded bundle.
@@ -143,6 +145,16 @@ func Build(ctx context.Context, snap *Snapshot, notes []string, opts Options) (*
 		return fail(fmt.Errorf("views: %w", err))
 	}
 
+	// Export snapshot before lockdown — COPY TO needs external access enabled.
+	var snapBytes []byte
+	var snapMeta *SnapshotMeta
+	if len(report.Bundles) > 0 {
+		snapBytes, snapMeta, err = exportSnapshot(ctx, sdb, &report)
+		if err != nil {
+			return fail(fmt.Errorf("snapshot: %w", err))
+		}
+	}
+
 	// Lock the engine down before anything can query it. The HTTP surface runs
 	// caller-supplied SQL, and DuckDB's SQL can read files, fetch URLs and write
 	// them back out; with external access off and the configuration frozen, a
@@ -154,7 +166,10 @@ func Build(ctx context.Context, snap *Snapshot, notes []string, opts Options) (*
 	}
 
 	report.BuildMS = time.Since(started).Milliseconds()
-	return &DB{db: sdb, Report: report}, nil
+	if snapMeta != nil {
+		snapMeta.BuildMS = report.BuildMS
+	}
+	return &DB{db: sdb, Report: report, snapshot: snapBytes, snapshotMeta: snapMeta}, nil
 }
 
 // Close releases the database.
