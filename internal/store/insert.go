@@ -150,6 +150,7 @@ func insertBoost(ctx context.Context, tx pgx.Tx, res *decode.Result) error {
 			b.MAPkPa, b.BaroKPa, b.MAFcgps,
 			b.LambdaE4, b.AbsLoadRaw, b.AmbientTempC,
 			b.FuelTrimShortPct, b.FuelTrimLongPct,
+			b.FuelLevelPct,
 			b.BoostPSI, b.Lambda,
 			int64(b.PIDsRequested), int64(b.PIDsAnswered), b.PollCadenceMS,
 		})
@@ -160,6 +161,7 @@ func insertBoost(ctx context.Context, tx pgx.Tx, res *decode.Result) error {
 		"monotonic_ms", "map_kpa", "baro_kpa", "maf_cgps",
 		"lambda_e4", "abs_load_raw", "ambient_temp_c",
 		"stft_pct", "ltft_pct",
+		"fuel_level_pct",
 		"boost_psi", "lambda_ratio",
 		"pids_requested", "pids_answered", "poll_cadence_ms",
 	}, rows)

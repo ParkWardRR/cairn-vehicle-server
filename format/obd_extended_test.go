@@ -22,6 +22,7 @@ func TestOBDExtendedRoundTrip(t *testing.T) {
 	binary.LittleEndian.PutUint32(p[12:], 8)
 	binary.LittleEndian.PutUint32(p[16:], 8)
 	binary.LittleEndian.PutUint16(p[20:], 2000)
+	p[22] = 72 // fuel level 72%
 
 	o, err := ParseOBDExtended(p)
 	if err != nil {
@@ -59,6 +60,9 @@ func TestOBDExtendedRoundTrip(t *testing.T) {
 	if pct, ok := o.AbsoluteLoadPct(); !ok || pct < 141.9 || pct > 142.1 {
 		t.Errorf("absolute load = %.1f%% (ok=%v), want about 142 — values above "+
 			"100 are normal under boost and must not be clamped", pct, ok)
+	}
+	if o.FuelLevelPct == nil || *o.FuelLevelPct != 72 {
+		t.Error("fuel level did not decode")
 	}
 }
 
@@ -101,6 +105,7 @@ func TestOBDExtendedSentinelsAreAbsent(t *testing.T) {
 	p[9] = 0x80
 	p[10] = 0x80
 	p[11] = 0x80
+	p[22] = sentinelU8
 
 	o, err := ParseOBDExtended(p)
 	if err != nil {
@@ -110,7 +115,7 @@ func TestOBDExtendedSentinelsAreAbsent(t *testing.T) {
 	if o.MAPkPa != nil || o.BaroKPa != nil || o.LambdaE4 != nil ||
 		o.MAFcgps != nil || o.AbsLoadRaw != nil ||
 		o.AmbientTempC != nil || o.FuelTrimShortPct != nil ||
-		o.FuelTrimLongPct != nil {
+		o.FuelTrimLongPct != nil || o.FuelLevelPct != nil {
 		t.Error("a sentinel decoded to a value; an unanswered PID must be absent")
 	}
 

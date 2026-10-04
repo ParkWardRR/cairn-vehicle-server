@@ -771,6 +771,8 @@ type Boost struct {
 	FuelTrimShortPct *int8
 	FuelTrimLongPct  *int8
 
+	FuelLevelPct *uint8
+
 	// BoostPSI is gauge pressure, derived. Nil when either pressure is absent.
 	BoostPSI *float64
 	// Lambda is the equivalence ratio, derived. Nil when unreported.
@@ -794,6 +796,7 @@ func newBoost(manifest *format.Manifest, f *format.Frame, o *format.OBDExtended)
 		AmbientTempC:     o.AmbientTempC,
 		FuelTrimShortPct: o.FuelTrimShortPct,
 		FuelTrimLongPct:  o.FuelTrimLongPct,
+		FuelLevelPct:     o.FuelLevelPct,
 		PIDsRequested:    o.PIDsRequested,
 		PIDsAnswered:     o.PIDsAnswered,
 		PollCadenceMS:    o.PollCadenceMS,

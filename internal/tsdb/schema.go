@@ -69,6 +69,7 @@ CREATE TABLE boost (
     map_kpa      USMALLINT, baro_kpa UTINYINT, maf_cgps USMALLINT,
     lambda_e4    USMALLINT, abs_load_raw USMALLINT, ambient_c TINYINT,
     stft_pct     TINYINT, ltft_pct TINYINT,
+    fuel_level_pct UTINYINT,
     boost_psi    DOUBLE, lambda_ratio DOUBLE,
     pids_requested UINTEGER, pids_answered UINTEGER, poll_cadence_ms USMALLINT
 );

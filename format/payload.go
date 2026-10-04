@@ -576,6 +576,8 @@ type OBDExtended struct {
 	PIDsRequested uint32
 	PIDsAnswered  uint32
 	PollCadenceMS uint16
+
+	FuelLevelPct *uint8
 }
 
 // BoostGaugeKPa returns gauge pressure — boost above ambient — and whether it
@@ -645,6 +647,10 @@ func ParseOBDExtended(p []byte) (*OBDExtended, error) {
 	o.PIDsRequested = binary.LittleEndian.Uint32(p[12:16])
 	o.PIDsAnswered = binary.LittleEndian.Uint32(p[16:20])
 	o.PollCadenceMS = binary.LittleEndian.Uint16(p[20:22])
+
+	if v := p[22]; v != sentinelU8 {
+		o.FuelLevelPct = &v
+	}
 
 	return &o, nil
 }
