@@ -55,7 +55,7 @@ Device Recording ──► Finalized ──► Queued ──► Uploading ──
 |------|---------|-----------|----------|
 | **Raw bundles** | Original immutable device bundles | Indefinite | Object store (filesystem or S3-compatible local) |
 | **Normalized data** | PostgreSQL/PostGIS trip records | Indefinite | Database |
-| **Derived data** | Plugin outputs, aggregations | Regenerable; keep current version | Database |
+| **Derived data** | Decoded records, aggregations | Regenerable; keep current version | Database |
 | **Staging** | In-progress uploads | Until acknowledged or expired | Temp directory |
 
 ### Raw Bundle Policy
@@ -94,7 +94,7 @@ Device Recording ──► Finalized ──► Queued ──► Uploading ──
 
 ### Restore Procedure
 
-1. Provision fresh server with Docker Compose stack
+1. Provision a fresh host (see [deploying.md](deploying.md); `deploy/deploy-v3.sh`)
 2. Restore PostgreSQL from latest dump
 3. Restore raw bundle object store from backup
 4. Restore certificates and configuration
@@ -139,7 +139,7 @@ Export includes both raw and derived data. 100% of user data must be exportable.
 1. All acknowledged trips are safe on the server
 2. Only in-progress recording may be lost
 3. Replace microSD, re-provision device
-4. Odin `sd-recover` tool may salvage partial data from failed card
+4. Partial data may be salvageable from a failed card with ordinary SD recovery tools. (The former Odin `sd-recover` tool was retired in 2026-10-05.)
 
 ### Worst Case: Both Server and Device Loss
 

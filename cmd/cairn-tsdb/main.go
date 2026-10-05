@@ -14,7 +14,7 @@
 //	cairn-tsdb -sd /Volumes/CAIRN/cairn -verify
 //	cairn-tsdb -sd /Volumes/CAIRN/cairn -query 'SELECT max(boost_psi) FROM boost'
 //
-// v1 trips are not read. v1 is dead: see docs/trip-file-format.md.
+// v1 trips are not read. v1 is dead.
 //
 // The read-only query contract is per vehicle. Every table and every v_* view
 // carries vehicle_id (32 lowercase hex, the bundle manifest's binding) and is

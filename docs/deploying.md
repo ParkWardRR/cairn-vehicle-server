@@ -1,4 +1,4 @@
-# Deploying the v2 ingest server
+# Deploying the ingest server
 
 What is actually running, and why each piece is where it is. Current as of
 2026-10-01, when the server first went up as a real service.
@@ -180,3 +180,8 @@ startup rather than reporting anything useful.
 cd server && make build     # ./bin/, then install to /usr/local/bin
 make bench-isa              # re-derive the v1-vs-v3 table
 ```
+
+To build on the host and install the binaries and systemd units in one step, use
+`deploy/deploy-v3.sh <user@host>` (it also builds `cairn-tsdb`, which needs cgo, and
+keeps the previous binaries as `<name>.prev`). The UI is deployed separately with
+`deploy/deploy-ui.sh`.

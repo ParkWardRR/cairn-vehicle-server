@@ -202,7 +202,7 @@ func objectIDToDigest(id string) ([32]byte, error) {
 // snapshotSD reads sealed v2 bundles from <sdRoot>/bundles.
 //
 // Only that directory is read. The card's trips/ directory holds v1 trips; v1
-// is dead (see docs/trip-file-format.md), has no read path, and is deliberately
+// is dead, has no read path, and is deliberately
 // not touched here. Likewise capture/, which is a bundle still being written.
 //
 // The manifest's own member list decides which files are read and what they
