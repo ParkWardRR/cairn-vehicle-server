@@ -15,19 +15,14 @@ import (
 	"time"
 )
 
-// Plan is everything a provisioning run needs. Secrets are carried as values
-// read from files or the environment; none of them ever reaches argv or output.
+// Plan is everything a provisioning run needs. The dongle holds no network
+// credential (no Wi-Fi, no client certificate), so there is no secret in it:
+// what is installed is the vehicle assignment and the counter floor.
 type Plan struct {
 	AdminCmd string // shell prefix that runs cairn-admin on the server host
 
 	Vehicle    string // 32 hex; with no Assignment, one is created
 	Assignment string // 32 hex
-
-	CertPEM  []byte
-	KeyPEM   []byte
-	WifiSSID string
-	WifiPass string
-	OpenWifi bool // an open network: the password is empty on purpose
 
 	Name string
 
@@ -113,8 +108,6 @@ func cmd(c Conn, timeout time.Duration, line, what string) error {
 	return nil
 }
 
-func b64(s []byte) string { return base64.StdEncoding.EncodeToString(s) }
-
 // Run executes the provisioning flow.
 func Run(c Conn, p Plan) error {
 	if p.Log == nil {
@@ -126,14 +119,6 @@ func Run(c Conn, p Plan) error {
 	if p.BeginRetry == 0 {
 		p.BeginRetry = 30 * time.Second
 	}
-	if (p.CertPEM == nil) != (p.KeyPEM == nil) {
-		return errors.New("a client certificate and key must be given together")
-	}
-	if p.WifiSSID != "" && p.WifiPass == "" && !p.OpenWifi {
-		// SSID without a password and without --open-wifi: almost certainly a mistake.
-		return errors.New("a Wi-Fi SSID needs a password (or --open-wifi for an open network)")
-	}
-
 	// 1. open a session, retrying while the device boots.
 	var deviceID, fingerprint string
 	begin := time.Now().Add(p.BeginRetry)
@@ -231,27 +216,7 @@ func Run(c Conn, p Plan) error {
 		}
 	}
 
-	// 5. install everything on the device, then commit once.
-	if p.CertPEM != nil {
-		if err := cmd(c, p.Timeout, "SET client_cert "+b64(p.CertPEM), "client_cert"); err != nil {
-			return err
-		}
-		if err := cmd(c, p.Timeout, "SET client_key "+b64(p.KeyPEM), "client_key"); err != nil {
-			return err
-		}
-	}
-	if p.WifiSSID != "" {
-		if err := cmd(c, p.Timeout, "SET wifi_ssid "+b64([]byte(p.WifiSSID)), "wifi_ssid"); err != nil {
-			return err
-		}
-		pass := "-"
-		if p.WifiPass != "" {
-			pass = b64([]byte(p.WifiPass))
-		}
-		if err := cmd(c, p.Timeout, "SET wifi_pass "+pass, "wifi_pass"); err != nil {
-			return err
-		}
-	}
+	// 5. install the assignment and counter floor on the device, then commit once.
 	if p.Vehicle != "" && p.Assignment != "" {
 		if !hex32.MatchString(p.Vehicle) || !hex32.MatchString(p.Assignment) {
 			return errors.New("vehicle and assignment must be 32 lowercase hex characters")

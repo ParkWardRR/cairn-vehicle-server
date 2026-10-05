@@ -1,14 +1,14 @@
-// Command cairn-provision installs credentials on a Cairn dongle over USB and
-// enrols it with the server.
+// Command cairn-provision enrols a Cairn dongle with the server over USB and
+// installs its vehicle assignment and counter floor.
 //
 //	cairn-provision --port /dev/cu.usbserial-10 --reset \
 //	  --admin-cmd 'ssh user@host sudo -u cairn cairn-admin -data /var/lib/cairn -keystore-master /etc/cairn/keystore.master' \
-//	  --vehicle <32hex> --cert client.crt --key client.key \
-//	  --wifi-ssid HomeNet --wifi-pass-file ./wifi.pass
+//	  --vehicle <32hex> --name car
 //
-// Secrets (the Wi-Fi password, the private key) are read from files or the
-// environment and never appear in argv, in output, or in shell history. See
-// docs/device-provisioning.md.
+// The dongle holds no network credential, so nothing secret is provisioned: no
+// Wi-Fi password, no client certificate, no private key. The device's storage
+// root is sealed to the server's enrolment key on the device and never printed
+// in the clear. See docs/device-provisioning.md.
 package main
 
 import (
@@ -82,11 +82,6 @@ func main() {
 	admin := flag.String("admin-cmd", "", "shell prefix that runs cairn-admin on the server host (omit to skip server enrolment)")
 	vehicle := flag.String("vehicle", "", "vehicle ID (32 hex) to assign the device to")
 	assignment := flag.String("assignment", "", "existing assignment ID (32 hex); created if omitted and --vehicle is given")
-	certFile := flag.String("cert", "", "client certificate PEM (CN must be the device id)")
-	keyFile := flag.String("key", "", "client private key PEM")
-	ssid := flag.String("wifi-ssid", "", "Wi-Fi network name")
-	passFile := flag.String("wifi-pass-file", "", "file holding the Wi-Fi password (or set CAIRN_WIFI_PASSWORD)")
-	openWifi := flag.Bool("open-wifi", false, "the Wi-Fi network has no password")
 	name := flag.String("name", "", "friendly device name for the server")
 	expectID := flag.String("expect-device-id", "", "abort unless the device reports this id (from an independent record)")
 	expectFP := flag.String("expect-fingerprint", "", "abort unless the device reports this fingerprint (from an independent record)")
@@ -99,35 +94,8 @@ func main() {
 	}
 
 	p := Plan{AdminCmd: *admin, Vehicle: strings.ToLower(*vehicle), Assignment: strings.ToLower(*assignment),
-		WifiSSID: *ssid, OpenWifi: *openWifi, Name: *name, ExpectDeviceID: *expectID, ExpectFingerprint: *expectFP,
+		Name: *name, ExpectDeviceID: *expectID, ExpectFingerprint: *expectFP,
 		Log: func(f string, a ...any) { fmt.Printf("  "+f+"\n", a...) }}
-
-	if (*certFile == "") != (*keyFile == "") {
-		fatal("--cert and --key go together")
-	}
-	if *certFile != "" {
-		var err error
-		if p.CertPEM, err = os.ReadFile(*certFile); err != nil {
-			fatal("%v", err)
-		}
-		if p.KeyPEM, err = os.ReadFile(*keyFile); err != nil {
-			fatal("%v", err)
-		}
-	}
-	if *ssid != "" && !*openWifi {
-		switch {
-		case *passFile != "":
-			b, err := os.ReadFile(*passFile)
-			if err != nil {
-				fatal("%v", err)
-			}
-			p.WifiPass = strings.TrimRight(string(b), "\r\n")
-		case os.Getenv("CAIRN_WIFI_PASSWORD") != "":
-			p.WifiPass = os.Getenv("CAIRN_WIFI_PASSWORD")
-		default:
-			fatal("no Wi-Fi password: use --wifi-pass-file or CAIRN_WIFI_PASSWORD (never a command-line argument)")
-		}
-	}
 
 	p.Confirm = func(id, fp string) (bool, error) {
 		fmt.Printf("\nDevice %s\nFingerprint %s\n", id, fp)

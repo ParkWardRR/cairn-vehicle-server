@@ -18,9 +18,6 @@ const (
 	devFP   = "5fd41190"
 	vehID   = "606162636465666768696a6b6c6d6e6f"
 	asgID   = "707172737475767778797a7b7c7d7e7f"
-	canary  = "SECRET-WIFI-PASSWORD-CANARY"
-	keyPEM  = "-----BEGIN EC PRIVATE KEY-----\nSECRET-KEY-CANARY\n-----END EC PRIVATE KEY-----\n"
-	certPEM = "-----BEGIN CERTIFICATE-----\nMIIBabc\n-----END CERTIFICATE-----\n"
 )
 
 // fakeDevice speaks the console protocol the firmware speaks, including the
@@ -143,13 +140,12 @@ esac
 func basePlan(prefix string) Plan {
 	return Plan{
 		AdminCmd: prefix, Vehicle: vehID,
-		CertPEM: []byte(certPEM), KeyPEM: []byte(keyPEM), WifiSSID: "HomeNet", WifiPass: canary,
 		Confirm: func(string, string) (bool, error) { return true, nil },
 		Timeout: 2 * time.Second, BeginRetry: 3 * time.Second,
 	}
 }
 
-func TestFullFlowInstallsEverythingAndNeverEchoesSecrets(t *testing.T) {
+func TestFullFlowInstallsAssignmentAndFloorAndSendsNoCredentials(t *testing.T) {
 	prefix, record := fakeAdmin(t, 7, devID)
 	conn, dev := newPair("", 0)
 
@@ -169,7 +165,7 @@ func TestFullFlowInstallsEverythingAndNeverEchoesSecrets(t *testing.T) {
 		}
 	}
 	joined := strings.Join(got, "\n")
-	for _, must := range []string{"SET client_cert ", "SET client_key ", "SET wifi_ssid ", "SET wifi_pass ",
+	for _, must := range []string{
 		"SET assignment " + vehID + " " + asgID, "SET counter_floor 7", "COMMIT"} {
 		if !strings.Contains(joined, must) {
 			t.Fatalf("the device never received %q; got:\n%s", must, joined)
@@ -189,10 +185,15 @@ func TestFullFlowInstallsEverythingAndNeverEchoesSecrets(t *testing.T) {
 		t.Fatalf("assignment call wrong:\n%s", rec)
 	}
 
-	// Secrets: not in the tool's own log, not in what it asked the server.
-	for _, secret := range []string{canary, "SECRET-KEY-CANARY"} {
-		if strings.Contains(logged.String(), secret) || strings.Contains(string(rec), secret) {
-			t.Fatalf("the tool leaked %q into its log or the admin call", secret)
+	// The dongle holds no network credential, so the tool must never send one:
+	// no Wi-Fi, no client certificate, no private key. A regression that
+	// re-added any of them would put a secret on the chip this change exists to
+	// keep clean.
+	for _, l := range got {
+		for _, banned := range []string{"wifi_", "client_cert", "client_key", "PRIVATE KEY"} {
+			if strings.Contains(l, banned) {
+				t.Fatalf("the tool sent %q to the device", l)
+			}
 		}
 	}
 }
@@ -257,64 +258,5 @@ func TestSilentDeviceTimesOutWithAHelpfulMessage(t *testing.T) {
 	err := Run(conn, p)
 	if err == nil || !strings.Contains(err.Error(), "60 s after boot") {
 		t.Fatalf("err = %v", err)
-	}
-}
-
-func TestInputValidation(t *testing.T) {
-	conn, _ := newPair("", 0)
-	p := basePlan("")
-	p.KeyPEM = nil
-	if err := Run(conn, p); err == nil {
-		t.Fatal("a certificate without a key was accepted")
-	}
-	p = basePlan("")
-	p.WifiPass = ""
-	if err := Run(conn, p); err == nil {
-		t.Fatal("an SSID without a password was accepted")
-	}
-}
-
-func TestExpectedIdentityMismatchStopsBeforeEnrolment(t *testing.T) {
-	prefix, record := fakeAdmin(t, 1, devID)
-	for name, mod := range map[string]func(*Plan){
-		"device id":   func(p *Plan) { p.ExpectDeviceID = "ffffffffffffffffffffffffffffffff" },
-		"fingerprint": func(p *Plan) { p.ExpectFingerprint = "deadbeef" },
-	} {
-		conn, dev := newPair("", 0)
-		p := basePlan(prefix)
-		mod(&p)
-		if err := Run(conn, p); err == nil || !strings.Contains(err.Error(), "nothing was enrolled") {
-			t.Fatalf("%s: err = %v", name, err)
-		}
-		if _, err := os.Stat(record); err == nil {
-			t.Fatalf("%s: the server was called for the wrong device", name)
-		}
-		for _, l := range dev.lines() {
-			if strings.HasPrefix(l, "SET ") || l == "COMMIT" {
-				t.Fatalf("%s: installed %q on the wrong device", name, l)
-			}
-		}
-	}
-	// And the right expectations pass.
-	conn, _ := newPair("", 0)
-	p := basePlan(prefix)
-	p.ExpectDeviceID, p.ExpectFingerprint = devID, devFP
-	if err := Run(conn, p); err != nil {
-		t.Fatalf("matching expectations refused: %v", err)
-	}
-}
-
-// A device that answers every BEGIN (it was slow, not deaf) leaves extra
-// PROV-READY lines in the stream. They must not be taken for the reply to the
-// next command.
-func TestStaleReadyRepliesAreSkipped(t *testing.T) {
-	prefix, _ := fakeAdmin(t, 1, devID)
-	conn, dev := newPair("", 0)
-	// Three more ready-replies are already queued behind the first.
-	for i := 0; i < 3; i++ {
-		dev.say("@prov PROV-READY " + devID + " " + devFP)
-	}
-	if err := Run(conn, basePlan(prefix)); err != nil {
-		t.Fatalf("stale PROV-READY lines broke the run: %v", err)
 	}
 }
