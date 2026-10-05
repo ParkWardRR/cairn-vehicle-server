@@ -6,6 +6,8 @@ require (
 	github.com/duckdb/duckdb-go/v2 v2.10506.0
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/klauspost/compress v1.18.3
+	go.bug.st/serial v1.8.0
+	golang.org/x/crypto v0.48.0
 )
 
 require (
@@ -26,11 +28,10 @@ require (
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.25 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
-	golang.org/x/crypto v0.48.0 // indirect
 	golang.org/x/exp v0.0.0-20260112195511-716be5621a96 // indirect
 	golang.org/x/mod v0.32.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
-	golang.org/x/sys v0.41.0 // indirect
+	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/telemetry v0.0.0-20260116145544-c6413dc483f5 // indirect
 	golang.org/x/text v0.34.0 // indirect
 	golang.org/x/tools v0.41.0 // indirect

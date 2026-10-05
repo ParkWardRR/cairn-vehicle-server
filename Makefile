@@ -54,7 +54,7 @@ endif
 # the variable is meaningless on arm64 anyway.
 ENV := $(if $(GOAMD64),GOAMD64=$(GOAMD64),)
 
-CMDS := cairn-server cairn-verify cairn-ledger cairn-signfw
+CMDS := cairn-server cairn-admin cairn-verify cairn-ledger cairn-signfw
 
 .PHONY: all build build-tsdb test vet bench bench-isa clean cpuinfo
 

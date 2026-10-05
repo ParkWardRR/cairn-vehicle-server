@@ -268,3 +268,47 @@ func (s *Store) RootKey(deviceID [16]byte, version uint32) ([32]byte, error) {
 func (s *Store) Provider() format.KeyProvider {
 	return format.ResolverKeyProvider{Resolver: s}
 }
+
+// wrapAAD binds a wrapped secret to its purpose, so a blob wrapped for one use
+// can never be unwrapped as another — and never as a device root, whose AAD has
+// a different prefix.
+func wrapAAD(purpose string) []byte {
+	return []byte("cairn/keystore-wrap/v1\x00" + purpose)
+}
+
+// WrapSecret seals an arbitrary server secret under the keystore master key.
+//
+// It exists for the device-enrolment private key. That key opens every
+// enrolment blob, and a blob is not secret — it is printed on a serial console,
+// passed through ssh and possibly logged — so a plaintext enrolment key sitting
+// in a backed-up data directory would turn "backup plus an old terminal
+// scroll-back" into every device's storage root. Wrapping it under the same
+// master key as the roots means it is exactly as protected as what it unlocks.
+func (s *Store) WrapSecret(purpose string, plaintext []byte) ([]byte, error) {
+	gcm, err := s.aead()
+	if err != nil {
+		return nil, err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, fmt.Errorf("keystore nonce: %w", err)
+	}
+	return gcm.Seal(nonce, nonce, plaintext, wrapAAD(purpose)), nil
+}
+
+// UnwrapSecret reverses WrapSecret. A wrong master key, a different purpose and
+// a tampered blob are deliberately indistinguishable.
+func (s *Store) UnwrapSecret(purpose string, wrapped []byte) ([]byte, error) {
+	gcm, err := s.aead()
+	if err != nil {
+		return nil, err
+	}
+	if len(wrapped) < gcm.NonceSize() {
+		return nil, errors.New("wrapped secret is truncated")
+	}
+	pt, err := gcm.Open(nil, wrapped[:gcm.NonceSize()], wrapped[gcm.NonceSize():], wrapAAD(purpose))
+	if err != nil {
+		return nil, fmt.Errorf("%s cannot be unwrapped (wrong keystore master key?): %w", purpose, err)
+	}
+	return pt, nil
+}

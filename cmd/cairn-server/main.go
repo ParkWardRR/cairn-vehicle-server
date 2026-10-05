@@ -29,6 +29,7 @@ import (
 	"github.com/ParkWardRR/Cairn/server/internal/cas"
 	"github.com/ParkWardRR/Cairn/server/internal/counters"
 	"github.com/ParkWardRR/Cairn/server/internal/devices"
+	"github.com/ParkWardRR/Cairn/server/internal/enroll"
 	"github.com/ParkWardRR/Cairn/server/internal/httpapi"
 	"github.com/ParkWardRR/Cairn/server/internal/intake"
 	"github.com/ParkWardRR/Cairn/server/internal/keystore"
@@ -70,6 +71,9 @@ func main() {
 		revokeWhy = flag.String("revoke-reason", "revoked by operator", "reason recorded with -revoke")
 		list      = flag.Bool("list-devices", false, "list enrolled devices and exit")
 
+		printEnrollKey = flag.Bool("print-enroll-key", false,
+			"print the server's device-enrolment public key (creating it on first use) and exit; "+
+				"pin the value in firmware as CAIRN_SERVER_ENROLL_PUBKEY_HEX")
 		printReceiptKey = flag.Bool("print-receipt-key", false,
 			"print the receipt-signing public key and exit (this is the value a device pins)")
 	)
@@ -99,6 +103,7 @@ func main() {
 		list:            *list,
 		firmwareDir:     *firmwareDir,
 		printReceiptKey: *printReceiptKey,
+		printEnrollKey:  *printEnrollKey,
 		log:             log,
 	}); err != nil {
 		log.Error("fatal", "error", err)
@@ -130,6 +135,7 @@ type runConfig struct {
 	firmwareDir string
 
 	printReceiptKey bool
+	printEnrollKey  bool
 
 	log *slog.Logger
 }
@@ -188,6 +194,19 @@ func run(cfg runConfig) error {
 	// Administrative modes run and exit, so enrolment never needs the service
 	// to be stopped.
 	switch {
+	case cfg.printEnrollKey:
+		// Created on first use: a device can only seal to a key someone has
+		// pinned, so the key has to exist before the first enrolment attempt.
+		key, created, err := enroll.LoadOrCreateServerKey(enroll.ServerKeyPath(cfg.dataDir), keyStore)
+		if err != nil {
+			return fmt.Errorf("enrolment key: %w", err)
+		}
+		fmt.Println(hex.EncodeToString(key.PublicKey().Bytes()))
+		if created {
+			fmt.Fprintln(os.Stderr, "created a new enrolment key (private half wrapped under the keystore master key)")
+		}
+		fmt.Fprintln(os.Stderr, "pin this in firmware/cairn-v2/include/secrets.h as CAIRN_SERVER_ENROLL_PUBKEY_HEX")
+		return nil
 	case cfg.list:
 		return listDevices(registry)
 	case cfg.enroll != "":

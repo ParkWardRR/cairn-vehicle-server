@@ -31,6 +31,8 @@ import (
 
 func main() {
 	dataDir := flag.String("data", "/var/lib/cairn", "cairn-server data directory")
+	master := flag.String("keystore-master", "",
+		"keystore master key file (needed by `device enroll`; default <data>/keys/keystore.master)")
 	flag.Usage = usage
 	flag.Parse()
 
@@ -40,7 +42,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	if err := run(*dataDir, args); err != nil {
+	if err := run(*dataDir, *master, args); err != nil {
 		fmt.Fprintln(os.Stderr, "cairn-admin:", err)
 		os.Exit(1)
 	}
@@ -57,13 +59,15 @@ func usage() {
   unassign <device-id>
   assignments [device-id]
   counters <device-id>
+  device enroll --blob B64 --confirm-fingerprint 8HEX [--name N] [--allow-key-change] [--reinstate]
+  device list
   client invite [--role user|admin] [--vehicles id,id|*] [--name N] [--ttl 10m]
   client list
   client revoke <id> [reason]
 `)
 }
 
-func run(dataDir string, args []string) error {
+func run(dataDir, master string, args []string) error {
 	paths := syncapi.DataPaths(dataDir)
 
 	switch args[0] {
@@ -81,6 +85,8 @@ func run(dataDir string, args []string) error {
 		return assignCmd(reg, args)
 	case "counters":
 		return countersCmd(dataDir, args[1:])
+	case "device":
+		return deviceCmd(dataDir, master, args[1:])
 	case "client":
 		reg, err := clients.Open(paths.Clients)
 		if err != nil {
