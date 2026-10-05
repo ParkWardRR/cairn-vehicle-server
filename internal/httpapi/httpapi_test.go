@@ -53,9 +53,14 @@ func newEnv(t *testing.T) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
+	regs, err := testbundle.OpenRegistries(root)
+	if err != nil {
+		t.Fatal(err)
+	}
 	svc, err := intake.New(intake.Config{
 		CAS: store, Receipts: rec, Registry: reg, Outbox: ob,
 		OfferDir: filepath.Join(root, "offers"),
+		Vehicles: regs.Vehicles, Counters: regs.Counters, Keys: regs.Keys,
 	})
 	if err != nil {
 		t.Fatal(err)

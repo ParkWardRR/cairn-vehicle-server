@@ -30,6 +30,7 @@ import (
 	"github.com/ParkWardRR/Cairn/server/internal/cas"
 	"github.com/ParkWardRR/Cairn/server/internal/decode"
 	"github.com/ParkWardRR/Cairn/server/internal/devices"
+	"github.com/ParkWardRR/Cairn/server/internal/keystore"
 	"github.com/ParkWardRR/Cairn/server/internal/ledger"
 	"github.com/ParkWardRR/Cairn/server/internal/mqtt"
 	"github.com/ParkWardRR/Cairn/server/internal/outbox"
@@ -55,23 +56,26 @@ func main() {
 
 		receiptKey = flag.String("receipt-key", "",
 			"Ed25519 seed file for receipts; defaults to <data>/keys/receipt.seed")
+		keystoreMaster = flag.String("keystore-master", "",
+			"keystore master key file (required: bundles are encrypted); keep it outside the backed-up data directory")
 	)
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	if err := run(runConfig{
-		dataDir:      *dataDir,
-		dsn:          *dsn,
-		mqttAddr:     *mqttAddr,
-		mqttPrefix:   *mqttPrefix,
-		pollInterval: *pollInterval,
-		maxAttempts:  *maxAttempts,
-		once:         *once,
-		reprocess:    *reprocess,
-		reprocessAll: *reprocessAll,
-		receiptKey:   *receiptKey,
-		log:          log,
+		dataDir:        *dataDir,
+		dsn:            *dsn,
+		mqttAddr:       *mqttAddr,
+		mqttPrefix:     *mqttPrefix,
+		pollInterval:   *pollInterval,
+		maxAttempts:    *maxAttempts,
+		once:           *once,
+		reprocess:      *reprocess,
+		reprocessAll:   *reprocessAll,
+		receiptKey:     *receiptKey,
+		keystoreMaster: *keystoreMaster,
+		log:            log,
 	}); err != nil {
 		log.Error("fatal", "error", err)
 		os.Exit(1)
@@ -79,17 +83,18 @@ func main() {
 }
 
 type runConfig struct {
-	dataDir      string
-	dsn          string
-	mqttAddr     string
-	mqttPrefix   string
-	pollInterval time.Duration
-	maxAttempts  int
-	once         bool
-	reprocess    string
-	reprocessAll bool
-	receiptKey   string
-	log          *slog.Logger
+	dataDir        string
+	dsn            string
+	mqttAddr       string
+	mqttPrefix     string
+	pollInterval   time.Duration
+	maxAttempts    int
+	once           bool
+	reprocess      string
+	reprocessAll   bool
+	receiptKey     string
+	keystoreMaster string
+	log            *slog.Logger
 }
 
 func run(cfg runConfig) error {
@@ -103,6 +108,14 @@ func run(cfg runConfig) error {
 	casStore, err := cas.Open(filepath.Join(cfg.dataDir, "cas"))
 	if err != nil {
 		return fmt.Errorf("open raw store: %w", err)
+	}
+
+	if cfg.keystoreMaster == "" {
+		return errors.New("-keystore-master is required: bundles are encrypted and the worker decrypts them")
+	}
+	ks, err := keystore.Open(filepath.Join(cfg.dataDir, "keystore.json"), cfg.keystoreMaster)
+	if err != nil {
+		return fmt.Errorf("open keystore: %w", err)
 	}
 
 	queue, err := outbox.Open(filepath.Join(cfg.dataDir, "outbox"))
@@ -173,7 +186,7 @@ func run(cfg runConfig) error {
 	w := worker.New(worker.Config{
 		Outbox:       queue,
 		Store:        db,
-		Decoder:      decode.New(casStore),
+		Decoder:      decode.New(casStore, ks.Provider()),
 		Ledger:       book,
 		Publish:      pub,
 		Log:          cfg.log,

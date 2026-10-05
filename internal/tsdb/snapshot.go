@@ -24,15 +24,15 @@ const SnapshotSchemaVersion = 1
 
 // SnapshotMeta is the manifest embedded in every snapshot archive.
 type SnapshotMeta struct {
-	SchemaVersion     int            `json:"schema_version"`
-	BuiltAt           time.Time      `json:"built_at"`
-	BuildMS           int64          `json:"build_ms"`
-	DecoderVersion    int            `json:"decoder_version"`
-	BundleCount       int            `json:"bundle_count"`
-	RowCounts         map[string]int `json:"row_counts"`
-	Tables            []string       `json:"tables"`
-	CompressedSize    int            `json:"compressed_size_bytes"`
-	ContentDigest     string         `json:"content_digest"`
+	SchemaVersion  int            `json:"schema_version"`
+	BuiltAt        time.Time      `json:"built_at"`
+	BuildMS        int64          `json:"build_ms"`
+	DecoderVersion int            `json:"decoder_version"`
+	BundleCount    int            `json:"bundle_count"`
+	RowCounts      map[string]int `json:"row_counts"`
+	Tables         []string       `json:"tables"`
+	CompressedSize int            `json:"compressed_size_bytes"`
+	ContentDigest  string         `json:"content_digest"`
 }
 
 // snapshotTables are exported as individual Parquet files.

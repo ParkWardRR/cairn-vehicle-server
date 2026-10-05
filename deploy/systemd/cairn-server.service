@@ -6,7 +6,7 @@
 # user rather than as a login account, because the directory it owns holds the
 # receipt-signing seed: that key is what authorizes a device to delete a trip
 # from its card, and losing it means reflashing firmware to re-pin a new one.
-Description=Cairn v2 ingest server
+Description=Cairn v3 ingest and app API server
 Documentation=https://github.com/ParkWardRR/Cairn
 Documentation=file:/usr/share/doc/cairn/deploying.md
 After=network-online.target
@@ -21,7 +21,15 @@ Group=cairn
 # editing a unit. CAIRN_ARGS is deliberately unquoted: systemd word-splits a
 # bare $VAR, which is what lets one variable carry the whole flag list.
 EnvironmentFile=/etc/cairn/server.env
-ExecStart=/usr/local/bin/cairn-server $CAIRN_ARGS
+
+# The keystore master key unwraps every escrowed device storage root, so it must
+# not live in the data directory that gets backed up: a backup of that directory
+# would then carry the key to everything in it. It is kept in /etc/cairn (root-
+# owned, outside StateDirectory) and handed to the service as a credential, which
+# systemd exposes at %d for the life of the unit only. Create it once with:
+#   openssl rand -hex 32 | sudo install -m 0400 -o root -g root /dev/stdin /etc/cairn/keystore.master
+LoadCredential=keystore-master:/etc/cairn/keystore.master
+ExecStart=/usr/local/bin/cairn-server -keystore-master %d/keystore-master $CAIRN_ARGS
 
 Restart=on-failure
 RestartSec=5s

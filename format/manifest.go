@@ -10,9 +10,9 @@ import (
 )
 
 // ManifestVersion is the manifest schema version this package implements.
-const ManifestVersion uint8 = 2
+const ManifestVersion uint8 = 3
 
-// SignatureAlgorithmEd25519 is the only algorithm v2 defines. "SHA-256 sign"
+// SignatureAlgorithmEd25519 is the only algorithm v3 defines. "SHA-256 sign"
 // conflates a digest with a signature; these are separate operations and the
 // manifest names the signature algorithm explicitly.
 const SignatureAlgorithmEd25519 = "ed25519"
@@ -82,7 +82,7 @@ type Manifest struct {
 	ContentRoot [32]byte
 
 	// PreviousBundleRoot chains bundle history. Populated but not enforced in
-	// v2: detecting deleted historical bundles is a different threat model from
+	// v3: detecting deleted historical bundles is a different threat model from
 	// detecting corruption within one bundle.
 	PreviousBundleRoot *[32]byte
 
@@ -93,6 +93,23 @@ type Manifest struct {
 
 	HasTripSeq bool
 	TripSeq    uint32
+
+	// VehicleID, AssignmentID and DeviceCounter bind the bundle to a vehicle, to
+	// the device-to-vehicle assignment that was active when it was captured, and
+	// to a position in the device's monotonic bundle sequence. Each is repeated
+	// in every member segment's header, where it is also authenticated into every
+	// frame; VerifyMembersAgainstManifest checks the two agree. They are signed
+	// here so the server can enforce assignment and replay policy on the manifest
+	// alone, before it has fetched a byte of content.
+	VehicleID     [16]byte
+	AssignmentID  [16]byte
+	DeviceCounter uint64
+
+	// StorageKeyVersion selects which escrowed K_root the segments were sealed
+	// under, and EncryptionSuite names the AEAD and KDF. Both are mandatory so a
+	// reader never has to guess how a bundle was protected.
+	StorageKeyVersion uint32
+	EncryptionSuite   string
 }
 
 // Manifest CBOR keys. Integer keys keep the encoding compact and unambiguous.
@@ -119,10 +136,18 @@ const (
 	keyRecoveryState   = 20
 	keyDiscardedTail   = 21
 	keySignatureAlgo   = 22
-	keyTripSeq         = 23
+	keyTripSeq         = 23 // optional
 
-	manifestFieldCountBase = 22
-	manifestFieldCountMax  = 23
+	// Keys 24-28 are mandatory. They sit after the optional trip_seq so the
+	// encoder can emit keys in ascending order with a single conditional.
+	keyVehicleID         = 24
+	keyAssignmentID      = 25
+	keyDeviceCounter     = 26
+	keyStorageKeyVersion = 27
+	keyEncryptionSuite   = 28
+
+	manifestFieldCountBase = 27
+	manifestFieldCountMax  = 28
 )
 
 var (
@@ -139,6 +164,9 @@ var (
 func (m *Manifest) MarshalCBOR() ([]byte, error) {
 	if m.SignatureAlgorithm != SignatureAlgorithmEd25519 {
 		return nil, fmt.Errorf("unsupported signature algorithm %q", m.SignatureAlgorithm)
+	}
+	if m.EncryptionSuite != EncryptionSuiteV1 {
+		return nil, fmt.Errorf("unsupported encryption suite %q", m.EncryptionSuite)
 	}
 	if err := validateMembers(m.Members); err != nil {
 		return nil, err
@@ -238,6 +266,17 @@ func (m *Manifest) MarshalCBOR() ([]byte, error) {
 		e.key(keyTripSeq)
 		e.uint(uint64(m.TripSeq))
 	}
+
+	e.key(keyVehicleID)
+	e.bytes(m.VehicleID[:])
+	e.key(keyAssignmentID)
+	e.bytes(m.AssignmentID[:])
+	e.key(keyDeviceCounter)
+	e.uint(m.DeviceCounter)
+	e.key(keyStorageKeyVersion)
+	e.uint(uint64(m.StorageKeyVersion))
+	e.key(keyEncryptionSuite)
+	e.text(m.EncryptionSuite)
 
 	return e.buf, nil
 }
@@ -398,6 +437,29 @@ func decodeManifest(b []byte) (*Manifest, error) {
 				return nil, fmt.Errorf("trip_seq: %w", err)
 			}
 			m.HasTripSeq = true
+		case keyVehicleID:
+			if err = copyFixed(d, m.VehicleID[:]); err != nil {
+				return nil, fmt.Errorf("vehicle_id: %w", err)
+			}
+		case keyAssignmentID:
+			if err = copyFixed(d, m.AssignmentID[:]); err != nil {
+				return nil, fmt.Errorf("assignment_id: %w", err)
+			}
+		case keyDeviceCounter:
+			if m.DeviceCounter, err = d.uint(); err != nil {
+				return nil, fmt.Errorf("device_counter: %w", err)
+			}
+		case keyStorageKeyVersion:
+			if m.StorageKeyVersion, err = d.uint32(); err != nil {
+				return nil, fmt.Errorf("storage_key_version: %w", err)
+			}
+		case keyEncryptionSuite:
+			if m.EncryptionSuite, err = d.text(); err != nil {
+				return nil, fmt.Errorf("encryption_suite: %w", err)
+			}
+			if m.EncryptionSuite != EncryptionSuiteV1 {
+				return nil, fmt.Errorf("unsupported encryption suite %q", m.EncryptionSuite)
+			}
 		default:
 			return nil, fmt.Errorf("unknown manifest key %d", key)
 		}

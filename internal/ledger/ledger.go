@@ -43,6 +43,20 @@ const (
 	EventReprocessed   Event = "reprocessed"
 	EventQuotaRefused  Event = "quota_refused"
 	EventDeviceUnknown Event = "device_unknown"
+
+	// v3 binding refusals. All of them carry a reason: they are the entries an
+	// operator reads to learn why a bundle that was validly signed was refused.
+	EventAssignmentRefused Event = "assignment_refused"
+	// EventQuarantined is a bundle held for inspection rather than ingested: its
+	// counter was already bound to different content, which a genuine device
+	// never does. The manifest and signature are kept so it can be examined.
+	EventQuarantined Event = "quarantined"
+	// EventCounterGap is a warning, not a refusal: the bundle is accepted, but
+	// counters between the previous high-water mark and this one never arrived.
+	EventCounterGap Event = "counter_gap"
+	// EventKeyMissing means no escrowed storage root exists for the bundle's key
+	// version, so accepting it would store data the server can never decode.
+	EventKeyMissing Event = "key_missing"
 )
 
 // Entry is one transition.
@@ -110,7 +124,8 @@ func (l *Ledger) Append(e Entry) error {
 	// written on an error path where it is easiest to forget.
 	switch e.Event {
 	case EventOfferRejected, EventChunkRejected, EventCommitFailed,
-		EventDecodeFailed, EventQuotaRefused, EventDeviceUnknown:
+		EventDecodeFailed, EventQuotaRefused, EventDeviceUnknown,
+		EventAssignmentRefused, EventQuarantined, EventCounterGap, EventKeyMissing:
 		if e.Reason == "" {
 			return fmt.Errorf("ledger: %s requires a reason", e.Event)
 		}

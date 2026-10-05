@@ -29,6 +29,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -314,11 +315,15 @@ type Event struct {
 
 // Decoder reads raw bundles from the content-addressed store.
 type Decoder struct {
-	cas *cas.Store
+	cas  *cas.Store
+	keys format.KeyProvider
 }
 
-func New(store *cas.Store) *Decoder {
-	return &Decoder{cas: store}
+// New creates a decoder. keys supplies the per-segment decryption keys; v3
+// segments are encrypted, so without them there is nothing to decode and Decode
+// fails with an explicit error rather than reading ciphertext as telemetry.
+func New(store *cas.Store, keys format.KeyProvider) *Decoder {
+	return &Decoder{cas: store, keys: keys}
 }
 
 // Input identifies the bundle to decode.
@@ -333,6 +338,9 @@ type Input struct {
 // It never mutates anything. The caller persists the result, which is what
 // keeps the decoder a pure function and therefore testable for reproducibility.
 func (d *Decoder) Decode(ctx context.Context, in Input) (*Result, error) {
+	if d.keys == nil {
+		return nil, errors.New("decode: no key provider; v3 segments are encrypted")
+	}
 	started := time.Now()
 
 	manifestBytes, err := d.cas.GetVerified(in.ManifestDigest)
@@ -416,7 +424,7 @@ func (d *Decoder) scanChain(
 			return fmt.Errorf("read member %q: %w", m.Name, err)
 		}
 
-		scan, err := format.ScanSegment(data, state)
+		scan, err := format.ScanSegment(data, state, d.keys)
 		if err != nil {
 			// An unreadable segment is recorded, not fatal: the rest of the
 			// bundle may still decode, and refusing all of it would discard

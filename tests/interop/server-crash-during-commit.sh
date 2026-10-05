@@ -59,7 +59,7 @@ RECEIPT_KEY=""
 
 start_server() {
     "${SERVER_BIN}" -data "${DATA}" -addr "127.0.0.1:${PORT}" -dev \
-        -receipt-key "${RECEIPT_KEY}" \
+        -receipt-key "${RECEIPT_KEY}" -keystore-master "${WORK}/keystore.master" \
         >>"${WORK}/server.log" 2>&1 &
     SERVER_PID=$!
 
@@ -87,15 +87,32 @@ count_receipts() {
 echo "building"
 ( cd "${REPO_ROOT}/server" && go build -o "${SERVER_BIN}" ./cmd/cairn-server ) || fail "server build"
 ( cd "${REPO_ROOT}/server" && go build -o "${SYNC_BIN}" ./cmd/cairn-syncdemo ) || fail "syncdemo build"
+ADMIN_BIN="${WORK}/cairn-admin"
+( cd "${REPO_ROOT}/server" && go build -o "${ADMIN_BIN}" ./cmd/cairn-admin ) || fail "admin build"
 
-PUBKEY="$("${SYNC_BIN}" -print-identity | awk '/public_key/{print $2}')"
-[[ -n "${PUBKEY}" ]] || fail "could not determine the device public key"
+IDENTITY="$("${SYNC_BIN}" -print-identity)"
+PUBKEY="$(awk '/^public_key/{print $2}' <<<"${IDENTITY}")"
+ROOT="$(awk '/^storage_root/{print $2}' <<<"${IDENTITY}")"
+VEHICLE="$(awk '/^vehicle_id/{print $2}' <<<"${IDENTITY}")"
+ASSIGNMENT="$(awk '/^assignment_id/{print $2}' <<<"${IDENTITY}")"
+[[ -n "${PUBKEY}" && -n "${ROOT}" && -n "${VEHICLE}" && -n "${ASSIGNMENT}" ]] \
+    || fail "could not determine the device identity"
+
+# v3 intake refuses a device with no escrowed storage root and no assignment to
+# a vehicle, so enrolment is three steps: the device and its root, the vehicle,
+# and the assignment the synthetic bundles carry.
+enrol() {
+    "${SERVER_BIN}" -data "${DATA}" -keystore-master "${WORK}/keystore.master" \
+        -enroll "${DEVICE_ID}" -enroll-key "${PUBKEY}" -enroll-root "${ROOT}" \
+        -enroll-name crash-test >/dev/null || return 1
+    "${ADMIN_BIN}" -data "${DATA}" vehicle add --id "${VEHICLE}" --name "crash test car" >/dev/null || return 1
+    # The synthetic bundles carry a fixed assignment id, so it is pinned here.
+    "${ADMIN_BIN}" -data "${DATA}" assign --assignment-id "${ASSIGNMENT}" "${DEVICE_ID}" "${VEHICLE}" >/dev/null
+}
 
 mkdir -p "${DATA}"
 RECEIPT_KEY="${WORK}/receipt.seed"
-"${SERVER_BIN}" -data "${DATA}" \
-    -enroll "${DEVICE_ID}" -enroll-key "${PUBKEY}" -enroll-name crash-test >/dev/null \
-    || fail "enrolment"
+enrol || fail "enrolment"
 
 # ── case 1: crash after a successful commit ─────────────────────────────────
 echo
@@ -136,9 +153,7 @@ for i in $(seq 1 "${ITERATIONS}"); do
     kill_server_hard
     rm -rf "${DATA}"
     mkdir -p "${DATA}"
-    "${SERVER_BIN}" -data "${DATA}" \
-        -enroll "${DEVICE_ID}" -enroll-key "${PUBKEY}" -enroll-name crash-test >/dev/null \
-        || fail "enrolment on iteration ${i}"
+    enrol || fail "enrolment on iteration ${i}"
     start_server
 
     # Many small chunks, so the sync lasts long enough to interrupt.
@@ -199,9 +214,7 @@ echo "case 3: the server's signing key rotates across a restart"
 kill_server_hard
 rm -rf "${DATA}"
 mkdir -p "${DATA}"
-"${SERVER_BIN}" -data "${DATA}" \
-    -enroll "${DEVICE_ID}" -enroll-key "${PUBKEY}" -enroll-name crash-test >/dev/null \
-    || fail "enrolment for case 3"
+enrol || fail "enrolment for case 3"
 start_server
 
 "${SYNC_BIN}" -server "${BASE}" -insecure >"${WORK}/sync-rotate-1.log" 2>&1 \

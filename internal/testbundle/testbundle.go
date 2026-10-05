@@ -7,9 +7,15 @@
 // implementation; building through the real encoder means an end-to-end test
 // actually exercises the format.
 //
-// Everything is deterministic: a fixed device key seed and fixed timestamps, so
-// a failure reproduces and a device key stays stable across a simulated
-// restart.
+// Everything is deterministic: a fixed device key seed, fixed timestamps, a
+// fixed storage root and fixed frame nonces, so a failure reproduces, a device
+// key stays stable across a simulated restart, and golden digests that cover a
+// bundle's content root stay pinned. Production nonces are random; see
+// NonceReader for why that is safe here and nowhere else.
+//
+// Every bundle is v3: all frames are encrypted under keys derived from the
+// exported test root (RootKey), and bound to a vehicle, an assignment and a
+// device counter. Tests that read payloads decrypt with Keys or Bundle.Keys.
 package testbundle
 
 import (
@@ -35,6 +41,65 @@ type Bundle struct {
 
 	// Stream is the full bundle byte stream the chunks partition.
 	Stream []byte
+
+	// RootKey and KeyVersion are the device storage root the segments were
+	// sealed under, so a test can decrypt them. Keys returns the matching
+	// provider.
+	RootKey    [format.RootKeySize]byte
+	KeyVersion uint32
+}
+
+// Keys returns a provider that decrypts this bundle.
+func (b *Bundle) Keys() format.KeyProvider {
+	return &format.RootKeyProvider{Root: b.RootKey, Version: b.KeyVersion}
+}
+
+// Members returns the bundle's members by name, split back out of Stream.
+func (b *Bundle) Members() map[string][]byte {
+	out := make(map[string][]byte, len(b.Manifest.Members))
+	off := uint64(0)
+	for _, m := range b.Manifest.Members {
+		out[m.Name] = b.Stream[off : off+m.Length]
+		off += m.Length
+	}
+	return out
+}
+
+// RootKey is the default synthetic device storage root. A test key: it is
+// committed to a public repository and protects nothing.
+func RootKey() [format.RootKeySize]byte {
+	return sha256.Sum256([]byte("cairn-testbundle-storage-root -- PUBLIC TEST KEY"))
+}
+
+// DefaultKeyVersion is the storage_key_version of the default root.
+const DefaultKeyVersion = 1
+
+// DefaultDeviceCounter is the counter of a bundle built with no explicit one.
+// Counters start at 1: zero reads as "never set".
+const DefaultDeviceCounter = 1
+
+// Keys returns a provider for the default root.
+func Keys() format.KeyProvider {
+	return &format.RootKeyProvider{Root: RootKey(), Version: DefaultKeyVersion}
+}
+
+// VehicleID returns the conventional synthetic vehicle identifier.
+func VehicleID() [16]byte {
+	var id [16]byte
+	for i := range id {
+		id[i] = byte(0x30 + i)
+	}
+	return id
+}
+
+// AssignmentID returns the conventional synthetic device-to-vehicle assignment
+// identifier.
+func AssignmentID() [16]byte {
+	var id [16]byte
+	for i := range id {
+		id[i] = byte(0x50 + i)
+	}
+	return id
 }
 
 // DeviceKey returns the fixed synthetic device signing key.
@@ -76,6 +141,23 @@ type Options struct {
 	// Zero means every sample has a fix.
 	FixlessFrom int
 
+	// VehicleID and AssignmentID bind the bundle. Zero means the conventional
+	// synthetic values (VehicleID(), AssignmentID()). They are written into every
+	// segment header and the manifest.
+	VehicleID    [16]byte
+	AssignmentID [16]byte
+
+	// DeviceCounter is the device's monotonic bundle counter. Zero means
+	// DefaultDeviceCounter. A test that offers several bundles from one device
+	// must give each a larger value.
+	DeviceCounter uint64
+
+	// RootKey and KeyVersion select the storage root. A nil RootKey means the
+	// default root at DefaultKeyVersion; a non-nil one must come with a non-zero
+	// KeyVersion.
+	RootKey    *[format.RootKeySize]byte
+	KeyVersion uint32
+
 	// Mutate runs after the manifest is built but before it is signed, so a
 	// test can produce a validly signed manifest that is nevertheless wrong.
 	Mutate func(*format.Manifest)
@@ -95,8 +177,34 @@ func Build(opts Options) (*Bundle, error) {
 	deviceID := DeviceID()
 	pub, priv := DeviceKey()
 
+	id := binding{
+		vehicle:    opts.VehicleID,
+		assignment: opts.AssignmentID,
+		counter:    opts.DeviceCounter,
+		root:       RootKey(),
+		version:    DefaultKeyVersion,
+	}
+	if id.vehicle == ([16]byte{}) {
+		id.vehicle = VehicleID()
+	}
+	if id.assignment == ([16]byte{}) {
+		id.assignment = AssignmentID()
+	}
+	if id.counter == 0 {
+		id.counter = DefaultDeviceCounter
+	}
+	if opts.RootKey != nil {
+		if opts.KeyVersion == 0 {
+			return nil, fmt.Errorf("RootKey given without a KeyVersion")
+		}
+		id.root, id.version = *opts.RootKey, opts.KeyVersion
+	}
+
 	// Capture chain: segment 1 continues segment 0's sequence and CRC chain.
-	w0 := format.NewSegmentWriter(segHeader(deviceID, 0), format.ScanState{})
+	w0, err := id.writer(deviceID, 0, format.ScanState{})
+	if err != nil {
+		return nil, err
+	}
 	for i := 0; i < opts.GNSSSamples; i++ {
 		// A receiver that has lost the sky still produces samples; they simply
 		// carry no position. Recording them is how the gap stays visible.
@@ -131,7 +239,10 @@ func Build(opts Options) (*Bundle, error) {
 	}
 	seg0 := append([]byte(nil), w0.Bytes()...)
 
-	w1 := format.NewSegmentWriter(segHeader(deviceID, 1), w0.NextState())
+	w1, err := id.writer(deviceID, 1, w0.NextState())
+	if err != nil {
+		return nil, err
+	}
 	for i := 0; i < opts.OBDSamples; i++ {
 		if err := w1.Append(format.RecordOBDSnapshot, 1, 0, uint32(12000+i*1000), OBDPayload()); err != nil {
 			return nil, fmt.Errorf("append OBD %d: %w", i, err)
@@ -140,7 +251,10 @@ func Build(opts Options) (*Bundle, error) {
 	seg1 := append([]byte(nil), w1.Bytes()...)
 
 	// Journal chain: independent, so it starts from a zero state (spec §3.2.1).
-	wj := format.NewSegmentWriter(segHeader(deviceID, 0), format.ScanState{})
+	wj, err := id.writer(deviceID, format.JournalSegmentIndex, format.ScanState{})
+	if err != nil {
+		return nil, err
+	}
 	for i := 0; i < opts.JournalEntries; i++ {
 		if err := wj.Append(format.RecordStateTransition, 1, 0, uint32(i*500), make([]byte, 20)); err != nil {
 			return nil, fmt.Errorf("append journal %d: %w", i, err)
@@ -210,7 +324,7 @@ func Build(opts Options) (*Bundle, error) {
 		DeviceID:                  deviceID,
 		DeviceKeyID:               format.DeviceKeyID(pub),
 		BootID:                    bootID,
-		FirmwareVersion:           "cairn-v2.0.0-test",
+		FirmwareVersion:           "cairn-v3.0.0-test",
 		SchemaVersion:             1,
 		CaptureStartedMonotonicUS: 1_000_000,
 		CaptureEndedMonotonicUS:   20_000_000,
@@ -225,6 +339,11 @@ func Build(opts Options) (*Bundle, error) {
 		PolicyVersion:             1,
 		RecoveryState:             format.RecoveryClean,
 		SignatureAlgorithm:        format.SignatureAlgorithmEd25519,
+		VehicleID:                 id.vehicle,
+		AssignmentID:              id.assignment,
+		DeviceCounter:             id.counter,
+		StorageKeyVersion:         id.version,
+		EncryptionSuite:           format.EncryptionSuiteV1,
 	}
 
 	if opts.Mutate != nil {
@@ -242,6 +361,8 @@ func Build(opts Options) (*Bundle, error) {
 		Manifest:      m,
 		Chunks:        chunks,
 		Stream:        stream,
+		RootKey:       id.root,
+		KeyVersion:    id.version,
 	}, nil
 }
 
@@ -272,17 +393,39 @@ func recordCounts(opts *Options) map[format.RecordType]uint32 {
 	return counts
 }
 
-func segHeader(deviceID [16]byte, idx uint32) format.SegmentHeader {
+// binding is the identity every segment of one bundle shares.
+type binding struct {
+	vehicle, assignment [16]byte
+	counter             uint64
+	root                [format.RootKeySize]byte
+	version             uint32
+}
+
+// writer starts a segment under the bundle's identity. Nonces are deterministic
+// and labelled by the whole identity plus the segment, so no two segments of
+// any one test bundle reuse a nonce stream.
+func (b *binding) writer(deviceID [16]byte, idx uint32, state format.ScanState) (*format.SegmentWriter, error) {
 	var boot [16]byte
 	for i := range boot {
 		boot[i] = byte(0xA0 + i)
 	}
-	return format.SegmentHeader{
+	h := format.SegmentHeader{
 		DeviceID:          deviceID,
 		BootID:            boot,
+		VehicleID:         b.vehicle,
+		AssignmentID:      b.assignment,
 		SegmentIndex:      idx,
 		OpenedMonotonicUS: 1_000_000,
+		StorageKeyVersion: b.version,
+		DeviceCounter:     b.counter,
 	}
+	keys := &format.RootKeyProvider{Root: b.root, Version: b.version}
+	label := fmt.Sprintf("testbundle/%x/%x/%d/%d/%d", b.vehicle, b.assignment, b.counter, b.version, idx)
+	w, err := format.NewSegmentWriter(h, state, keys, NonceReader(label))
+	if err != nil {
+		return nil, fmt.Errorf("segment %d writer: %w", idx, err)
+	}
+	return w, nil
 }
 
 // GNSSPayload builds a 32-byte GNSS sample with a 3D fix, per spec §4.1.

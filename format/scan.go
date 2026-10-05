@@ -29,6 +29,14 @@ const (
 
 	// StopSeqGap means the sequence number skipped a value.
 	StopSeqGap
+
+	// StopAuthFailed means a frame passed its CRC, chain and sequence checks but
+	// its authentication tag did not verify. Only a keyed scan can report it. It
+	// stops the scan exactly as StopCorruptFrame does: a frame whose authenticity
+	// is in doubt makes everything after it equally doubtful, and unlike a CRC
+	// mismatch it is never the expected result of a power cut, so it is always
+	// worth an operator's attention.
+	StopAuthFailed
 )
 
 func (r StopReason) String() string {
@@ -43,6 +51,8 @@ func (r StopReason) String() string {
 		return "CHAIN_BREAK"
 	case StopSeqGap:
 		return "SEQ_GAP"
+	case StopAuthFailed:
+		return "AUTH_FAILED"
 	default:
 		return fmt.Sprintf("StopReason(%d)", uint8(r))
 	}
@@ -64,8 +74,14 @@ type ScanResult struct {
 	Header SegmentHeader
 
 	// Frames are the valid frames, in file order. Every frame here passed its
-	// CRC, chain and sequence checks.
+	// CRC, chain and sequence checks, and, when Decrypted, its authentication
+	// tag.
 	Frames []Frame
+
+	// Decrypted reports that the scan was keyed: every retained frame's tag
+	// verified and its Payload holds plaintext. False means a structural scan,
+	// whose verdicts are real but say nothing about authenticity.
+	Decrypted bool
 
 	// Stop is why scanning ended.
 	Stop StopReason
@@ -103,24 +119,46 @@ type ScanResult struct {
 // Pass the zero ScanState for the first segment of a bundle. For later
 // segments, pass the preceding segment's Result.Next.
 //
-// A header error is returned as an error: the segment is unusable. The caller
-// must still not delete it — unreadable is not the same as worthless, and the
-// offline salvage tool may yet recover records from it.
-func ScanSegment(b []byte, state ScanState) (*ScanResult, error) {
+// keys selects the mode. With nil the scan is structural: torn tails, CRCs, the
+// chain and sequence are all verified over the stored ciphertext, with no key,
+// and frames carry Sealed bytes but no Payload. With a provider each frame is
+// additionally authenticated and decrypted; a tag failure ends the scan with
+// StopAuthFailed.
+//
+// A header error is returned as an error: the segment is unusable. So is a key
+// error (ErrNoKey, ErrKeyVersionMismatch): the segment is intact but cannot be
+// read with what the caller holds. The caller must still not delete either —
+// unreadable is not the same as worthless, and the offline salvage tool, or a
+// caller with the right key, may yet recover records from it.
+func ScanSegment(b []byte, state ScanState, keys KeyProvider) (*ScanResult, error) {
 	header, headerLen, err := ParseSegmentHeader(b)
 	if err != nil {
 		return nil, err
 	}
 
+	var cipher *SegmentCipher
+	if keys != nil {
+		key, err := keys.SegmentKey(&header)
+		if err != nil {
+			return nil, fmt.Errorf("segment key: %w", err)
+		}
+		if cipher, err = NewSegmentCipher(b[:headerLen], key, nil); err != nil {
+			return nil, err
+		}
+	}
+
 	res := &ScanResult{
 		Header:       header,
+		Decrypted:    cipher != nil,
 		RecordCounts: make(map[RecordType]int),
 	}
 
-	// For the first segment of a bundle the caller has no prior state, so the
-	// header's own FirstSeq establishes the expectation.
+	// For the first segment of a chain the caller has no prior state, so the
+	// header's own FirstSeq establishes the expectation. The journal is the first
+	// and only segment of its own chain.
 	expectedSeq := state.ExpectedSeq
-	if header.SegmentIndex == 0 && state.ExpectedSeq == 0 && state.ExpectedPrev == 0 {
+	if (header.SegmentIndex == 0 || header.SegmentIndex == JournalSegmentIndex) &&
+		state.ExpectedSeq == 0 && state.ExpectedPrev == 0 {
 		expectedSeq = header.FirstSeq
 	}
 	expectedPrev := state.ExpectedPrev
@@ -166,7 +204,7 @@ func ScanSegment(b []byte, state ScanState) (*ScanResult, error) {
 
 		f := decodeFrameHeader(body)
 		f.CRC32 = storedCRC
-		f.Payload = body[FrameHeaderSize : frameLen-FrameTrailerSize]
+		f.Sealed = body[FrameHeaderSize : frameLen-FrameTrailerSize]
 
 		if f.PrevCRC32 != expectedPrev {
 			return stop(StopChainBreak, fmt.Sprintf(
@@ -176,6 +214,20 @@ func ScanSegment(b []byte, state ScanState) (*ScanResult, error) {
 		if f.Seq != expectedSeq {
 			return stop(StopSeqGap, fmt.Sprintf(
 				"frame at offset %d: seq %d, expected %d", offset, f.Seq, expectedSeq))
+		}
+
+		// Authentication comes after the structural checks, not before: those
+		// need no key and must give the same verdict whether or not one is held,
+		// so a damaged frame reports as damage rather than as an auth failure.
+		if cipher != nil {
+			pt, err := cipher.Open(body[:FrameHeaderSize], f.Sealed)
+			if err != nil {
+				return stop(StopAuthFailed, fmt.Sprintf(
+					"frame at offset %d (seq %d): %v — the ciphertext, frame header or segment binding was altered, or the key is wrong",
+					offset, f.Seq, err))
+			}
+			f.Payload = pt
+			f.Decrypted = true
 		}
 
 		if !f.RecordType.Known() {
@@ -191,19 +243,20 @@ func ScanSegment(b []byte, state ScanState) (*ScanResult, error) {
 }
 
 // ScanBundle scans an ordered list of segments, threading continuity between
-// them. Segments must be supplied in ascending SegmentIndex order.
+// them. Segments must be supplied in ascending SegmentIndex order. keys is as
+// for ScanSegment.
 //
 // Scanning stops at the first segment that does not end cleanly: a damaged
 // segment means every later segment's chain expectation is unknowable, so
 // continuing would produce misleading verdicts rather than more data.
-func ScanBundle(segments [][]byte) ([]*ScanResult, error) {
+func ScanBundle(segments [][]byte, keys KeyProvider) ([]*ScanResult, error) {
 	var (
 		results []*ScanResult
 		state   ScanState
 	)
 
 	for i, seg := range segments {
-		res, err := ScanSegment(seg, state)
+		res, err := ScanSegment(seg, state, keys)
 		if err != nil {
 			return results, fmt.Errorf("segment %d: %w", i, err)
 		}

@@ -27,8 +27,14 @@ func main() {
 				"must be supplied)")
 		serverKeyHex = flag.String("server-key", "",
 			"hex Ed25519 server receipt key, to verify any receipts found")
-		asJSON  = flag.Bool("json", false, "emit JSON instead of a report")
-		verbose = flag.Bool("v", false, "list every segment and record tally")
+		rootKeyHex = flag.String("root-key", "",
+			"hex 32-byte device storage root. Without it the check is structural "+
+				"only (CRC, chain, sequence, Merkle all work on ciphertext); with it "+
+				"every frame's authentication tag is verified too. TEST KEYS ONLY on "+
+				"a shared machine — this is the secret that decrypts a device's history")
+		keyVersion = flag.Uint("key-version", 1, "storage_key_version that -root-key is")
+		asJSON     = flag.Bool("json", false, "emit JSON instead of a report")
+		verbose    = flag.Bool("v", false, "list every segment and record tally")
 	)
 	flag.Parse()
 
@@ -40,6 +46,16 @@ func main() {
 	}
 
 	opts := options{verbose: *verbose}
+
+	if *rootKeyHex != "" {
+		raw, err := hex.DecodeString(strings.TrimSpace(*rootKeyHex))
+		if err != nil || len(raw) != format.RootKeySize {
+			fatal("root-key: want %d hex bytes", format.RootKeySize)
+		}
+		p := &format.RootKeyProvider{Version: uint32(*keyVersion)}
+		copy(p.Root[:], raw)
+		opts.keys = p
+	}
 
 	if *deviceKeyHex != "" {
 		k, err := parseKey(*deviceKeyHex)
@@ -108,6 +124,9 @@ func parseKey(s string) (ed25519.PublicKey, error) {
 }
 
 type options struct {
+	// keys, when set, makes the scan verify every frame's AEAD tag. Nil keeps it
+	// structural, which is all that can be said without the device's root.
+	keys       format.KeyProvider
 	deviceKey  ed25519.PublicKey
 	serverKey  ed25519.PublicKey
 	receiptDir string
@@ -304,7 +323,7 @@ func verifyBundle(b discoveredBundle, opts options) bundleResult {
 	var totalDiscarded uint32
 
 	for _, name := range segs {
-		sr, err := scanFile(filepath.Join(b.dir, name), scanState)
+		sr, err := scanFile(filepath.Join(b.dir, name), scanState, opts.keys)
 		if err != nil {
 			// A header error means the segment is unusable. It is still not
 			// worthless: the server's salvage path may recover records, so this
@@ -342,7 +361,7 @@ func verifyBundle(b discoveredBundle, opts options) bundleResult {
 	if journal != "" {
 		// The journal has its own chain, so it starts from the zero state. A
 		// shared state here would report a spurious chain break.
-		sr, err := scanFile(filepath.Join(b.dir, journal), format.ScanState{})
+		sr, err := scanFile(filepath.Join(b.dir, journal), format.ScanState{}, opts.keys)
 		if err != nil {
 			res.fail("%s is unreadable: %v", journal, err)
 		} else {
@@ -774,12 +793,12 @@ func segmentNames(dir string) (capture []string, journal string) {
 	return capture, journal
 }
 
-func scanFile(path string, state format.ScanState) (*format.ScanResult, error) {
+func scanFile(path string, state format.ScanState, keys format.KeyProvider) (*format.ScanResult, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	return format.ScanSegment(b, state)
+	return format.ScanSegment(b, state, keys)
 }
 
 func summarize(name string, sr *format.ScanResult) segmentResult {

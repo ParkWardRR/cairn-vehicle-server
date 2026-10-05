@@ -1,5 +1,5 @@
 // Package intake implements the manifest-first, content-addressed upload
-// protocol from docs/bundle-format-v2.md section 6.
+// protocol from docs/bundle-format-v3.md section 6.
 //
 // The protocol is three steps — offer, transfer, commit — and the design rule
 // throughout is that ingest validates, durably stores, receipts and returns.
@@ -29,10 +29,13 @@ import (
 
 	"github.com/ParkWardRR/Cairn/server/format"
 	"github.com/ParkWardRR/Cairn/server/internal/cas"
+	"github.com/ParkWardRR/Cairn/server/internal/counters"
 	"github.com/ParkWardRR/Cairn/server/internal/devices"
+	"github.com/ParkWardRR/Cairn/server/internal/keystore"
 	"github.com/ParkWardRR/Cairn/server/internal/ledger"
 	"github.com/ParkWardRR/Cairn/server/internal/outbox"
 	"github.com/ParkWardRR/Cairn/server/internal/receipts"
+	"github.com/ParkWardRR/Cairn/server/internal/vehicles"
 )
 
 var (
@@ -67,6 +70,14 @@ type Service struct {
 	registry *devices.Registry
 	outbox   *outbox.Queue
 
+	// vehicles, counters and keys are the v3 binding: which car a bundle
+	// belongs to, whether its counter has been spent, and whether the server can
+	// decode it. All three are required — unlike the ledger, a nil here would
+	// silently turn off a security check rather than an audit trail.
+	vehicles *vehicles.Registry
+	counters *counters.Guard
+	keys     *keystore.Store
+
 	// offers holds manifest pointers for bundles that have been offered but not
 	// yet committed. It is a durable directory, not memory, so an offer
 	// survives a server restart mid-transfer.
@@ -86,6 +97,11 @@ type Config struct {
 	Outbox   *outbox.Queue
 	OfferDir string
 
+	// Vehicles, Counters and Keys are required; see Service.
+	Vehicles *vehicles.Registry
+	Counters *counters.Guard
+	Keys     *keystore.Store
+
 	// Ledger is optional; nil disables recording.
 	Ledger *ledger.Ledger
 }
@@ -104,6 +120,9 @@ func (s *Service) record(e ledger.Entry) {
 
 // New creates a Service.
 func New(cfg Config) (*Service, error) {
+	if cfg.Vehicles == nil || cfg.Counters == nil || cfg.Keys == nil {
+		return nil, errors.New("intake requires the vehicle registry, counter guard and keystore")
+	}
 	if err := os.MkdirAll(cfg.OfferDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create offer dir: %w", err)
 	}
@@ -113,6 +132,9 @@ func New(cfg Config) (*Service, error) {
 		receipts: cfg.Receipts,
 		registry: cfg.Registry,
 		outbox:   cfg.Outbox,
+		vehicles: cfg.Vehicles,
+		counters: cfg.Counters,
+		keys:     cfg.Keys,
 		offerDir: cfg.OfferDir,
 	}, nil
 }
@@ -210,6 +232,14 @@ func (s *Service) Offer(manifestBytes, signature []byte) (*OfferResult, error) {
 			TotalChunks:          len(manifest.ChunkDescriptors),
 		}, nil
 	} else if !errors.Is(err, receipts.ErrNotFound) {
+		return nil, err
+	}
+
+	// Bind the bundle to a vehicle, an assignment and an unspent counter, and
+	// confirm the server can decode it. After the idempotency shortcut on
+	// purpose: a duplicate of something already receipted is answered, not
+	// re-examined.
+	if err := s.bindManifest(manifest, manifestBytes, signature); err != nil {
 		return nil, err
 	}
 
@@ -483,6 +513,12 @@ func (s *Service) Commit(bundleID [16]byte) (*CommitResult, error) {
 	if computedRoot != manifest.ContentRoot {
 		return nil, fmt.Errorf("%w: reassembled root %x, signed root %x",
 			format.ErrContentRootMismatch, computedRoot, manifest.ContentRoot)
+	}
+
+	// Bind the counter to this content before issuing the receipt. See
+	// recordBinding for why the order matters.
+	if err := s.recordBinding(manifest); err != nil {
+		return nil, err
 	}
 
 	objectIDs := receipts.ObjectIDsFor(memberDigests)

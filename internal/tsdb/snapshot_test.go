@@ -160,7 +160,7 @@ func TestSnapshotEmptyDB(t *testing.T) {
 	}
 	t.Cleanup(func() { snap.Close() })
 
-	db, err := Build(context.Background(), snap, notes, Options{MemoryLimit: "512MB", Threads: 2})
+	db, err := Build(context.Background(), snap, notes, Options{MemoryLimit: "512MB", Threads: 2, Keys: testbundle.Keys()})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -11,10 +12,13 @@ import (
 
 	"github.com/ParkWardRR/Cairn/server/format"
 	"github.com/ParkWardRR/Cairn/server/internal/cas"
+	"github.com/ParkWardRR/Cairn/server/internal/counters"
 	"github.com/ParkWardRR/Cairn/server/internal/devices"
+	"github.com/ParkWardRR/Cairn/server/internal/keystore"
 	"github.com/ParkWardRR/Cairn/server/internal/outbox"
 	"github.com/ParkWardRR/Cairn/server/internal/receipts"
 	"github.com/ParkWardRR/Cairn/server/internal/testbundle"
+	"github.com/ParkWardRR/Cairn/server/internal/vehicles"
 )
 
 // ─── harness ────────────────────────────────────────────────────────────────
@@ -25,6 +29,9 @@ type harness struct {
 	receipts *receipts.Store
 	registry *devices.Registry
 	outbox   *outbox.Queue
+	vehicles *vehicles.Registry
+	counters *counters.Guard
+	keys     *keystore.Store
 
 	root       string
 	devicePriv ed25519.PrivateKey
@@ -65,12 +72,28 @@ func newHarnessAt(t *testing.T, root string) *harness {
 		t.Fatalf("outbox.Open: %v", err)
 	}
 
+	vr, err := vehicles.Open(filepath.Join(root, "vehicles.json"), filepath.Join(root, "keys", "vehicles.key"))
+	if err != nil {
+		t.Fatalf("vehicles.Open: %v", err)
+	}
+	guard, err := counters.Open(filepath.Join(root, "counters.json"))
+	if err != nil {
+		t.Fatalf("counters.Open: %v", err)
+	}
+	ks, err := keystore.Open(filepath.Join(root, "keystore.json"), filepath.Join(root, "keys", "keystore.master"))
+	if err != nil {
+		t.Fatalf("keystore.Open: %v", err)
+	}
+
 	svc, err := New(Config{
 		CAS:      store,
 		Receipts: rec,
 		Registry: reg,
 		Outbox:   ob,
 		OfferDir: filepath.Join(root, "offers"),
+		Vehicles: vr,
+		Counters: guard,
+		Keys:     ks,
 	})
 	if err != nil {
 		t.Fatalf("intake.New: %v", err)
@@ -85,8 +108,27 @@ func newHarnessAt(t *testing.T, root string) *harness {
 		t.Fatalf("enroll: %v", err)
 	}
 
+	// The synthetic bundles' vehicle, assignment and storage root, registered
+	// the way an operator would. Guarded so a second harness over the same
+	// directory (a simulated restart) reuses what is already there.
+	vehicleID, assignmentID := testbundle.VehicleID(), testbundle.AssignmentID()
+	vehicleHex := hex.EncodeToString(vehicleID[:])
+	deviceHex := hex.EncodeToString(deviceID[:])
+	if _, err := vr.Vehicle(vehicleHex); err != nil {
+		if _, err := vr.CreateVehicle(vehicles.NewVehicleSpec{ID: vehicleHex, DisplayName: "test car"}); err != nil {
+			t.Fatalf("create vehicle: %v", err)
+		}
+		if _, err := vr.AssignWithID(hex.EncodeToString(assignmentID[:]), deviceHex, vehicleHex, "test"); err != nil {
+			t.Fatalf("assign: %v", err)
+		}
+		if err := ks.Put(deviceHex, testbundle.DefaultKeyVersion, testbundle.RootKey()); err != nil {
+			t.Fatalf("escrow storage root: %v", err)
+		}
+	}
+
 	return &harness{
 		svc: svc, cas: store, receipts: rec, registry: reg, outbox: ob,
+		vehicles: vr, counters: guard, keys: ks,
 		root: root, devicePriv: priv, deviceID: deviceID,
 	}
 }
@@ -231,7 +273,7 @@ func TestCommittedMembersAreValidSegments(t *testing.T) {
 	captureResults, err := format.ScanBundle([][]byte{
 		member("seg-00000000.seg"),
 		member("seg-00000001.seg"),
-	})
+	}, testbundle.Keys())
 	if err != nil {
 		t.Fatalf("scan capture chain: %v", err)
 	}
@@ -250,7 +292,7 @@ func TestCommittedMembersAreValidSegments(t *testing.T) {
 	}
 
 	// The journal chain, independent and scanned from zero.
-	journal, err := format.ScanSegment(member("journal.seg"), format.ScanState{})
+	journal, err := format.ScanSegment(member("journal.seg"), format.ScanState{}, testbundle.Keys())
 	if err != nil {
 		t.Fatalf("scan journal: %v", err)
 	}
@@ -1001,7 +1043,8 @@ func TestQuotaAccumulatesAcrossBundles(t *testing.T) {
 	// any new space — correctly, since nothing new would be stored.
 	opts := testbundle.Default()
 	opts.ChunkSize = 256
-	opts.GNSSSamples = 20 // more samples, so different segments and a new root
+	opts.GNSSSamples = 20  // more samples, so different segments and a new root
+	opts.DeviceCounter = 2 // a second bundle from one device has the next counter
 	second, err := testbundle.Build(opts)
 	if err != nil {
 		t.Fatal(err)

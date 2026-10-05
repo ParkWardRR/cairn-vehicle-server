@@ -1,17 +1,22 @@
-// Command mkvectors writes the bundle format v2 conformance vectors to
-// fixtures/format-v2/.
+// Command mkvectors writes the bundle format v3 conformance vectors to
+// fixtures/format-v3/.
 //
-// The vectors are the executable form of docs/bundle-format-v2.md. A
+// The vectors are the executable form of docs/bundle-format-v3.md. A
 // conformance runner needs no knowledge of this implementation: each vector
 // directory holds the input bytes and an expected.json stating the verdict and
 // derived values, so the firmware (C) and emulator (Rust) implementations can
 // be checked against the specification rather than against Go.
 //
-// Everything here is deterministic. Keys are derived from fixed seeds and all
-// timestamps are constants, so regenerating the vectors produces byte-identical
-// output and a clean diff.
+// Everything here is deterministic. Keys are derived from fixed seeds, all
+// timestamps are constants, and frame nonces come from a fixed per-writer
+// stream instead of the hardware RNG, so regenerating the vectors produces
+// byte-identical output and a clean diff.
 //
-//	go run ./cmd/mkvectors -out ../fixtures/format-v2
+// THE KEYS IN THESE VECTORS ARE PUBLIC TEST KEYS. They are published in the
+// repository and in fixtures/format-v3/README.md. They protect nothing and must
+// never be provisioned onto a device or loaded into a real keystore.
+//
+//	go run ./cmd/mkvectors -out ../fixtures/format-v3
 package main
 
 import (
@@ -20,6 +25,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -27,25 +33,41 @@ import (
 	"path/filepath"
 
 	"github.com/ParkWardRR/Cairn/server/format"
+	"github.com/ParkWardRR/Cairn/server/internal/testbundle"
 )
 
 // Fixed seeds. Deterministic vectors matter more than unpredictable keys here:
 // these are test artifacts, never used to sign anything real.
 var (
-	deviceKeySeed = []byte("cairn-format-v2-device-key-seed!")
+	deviceKeySeed = []byte("cairn-format-v3-device-key-seed!")
 	// A third fixed seed for the OTA update key, kept separate from both the
 	// device and server keys because the authority it carries is different: it
 	// says "this code is safe to run" rather than "this data is mine" or "this
 	// data is safe to delete".
-	updateKeySeed = []byte("cairn-format-v2-update-key-seed!")
-	serverKeySeed = []byte("cairn-format-v2-server-key-seed!")
+	updateKeySeed = []byte("cairn-format-v3-update-key-seed!")
+	serverKeySeed = []byte("cairn-format-v3-server-key-seed!")
 )
 
 const (
 	fixedUTCBasisMS   = 1_790_000_000_000
 	fixedIngestUTCMS  = 1_790_000_123_456
 	fixedOpenedMonoUS = 1_000_000
+
+	// Binding fields every vector segment and manifest carries.
+	vectorDeviceCounter = 42
+	vectorKeyVersion    = 1
+	altKeyVersion       = 2
 )
+
+// The storage roots. Derived from a label so the value is reproducible and
+// obviously not random; published in keys.json and the README.
+var (
+	rootKey    = sha256.Sum256([]byte("cairn-format-v3-test-storage-root-v1 -- PUBLIC TEST KEY"))
+	altRootKey = sha256.Sum256([]byte("cairn-format-v3-test-storage-root-v2 -- PUBLIC TEST KEY"))
+)
+
+// keys is the provider a conformance verifier is given: root version 1 only.
+var keys = &format.RootKeyProvider{Root: rootKey, Version: vectorKeyVersion}
 
 // expectation is the machine-readable verdict for a vector.
 type expectation struct {
@@ -54,6 +76,8 @@ type expectation struct {
 	Asserts     string `json:"asserts"`
 
 	Scan     *scanExpectation       `json:"scan,omitempty"`
+	Keyed    *keyedExpectation      `json:"keyed,omitempty"`
+	Binding  *bindingExpectation    `json:"binding,omitempty"`
 	Header   *headerExpectation     `json:"header,omitempty"`
 	Manifest *manifestExpectation   `json:"manifest,omitempty"`
 	Receipt  *receiptExpectation    `json:"receipt,omitempty"`
@@ -74,6 +98,29 @@ type scanExpectation struct {
 	RecordCounts       map[string]int `json:"record_counts"`
 	FirstSeq           *uint32        `json:"first_seq,omitempty"`
 	LastSeq            *uint32        `json:"last_seq,omitempty"`
+}
+
+// keyedExpectation is the verdict of the same segment scanned with the vector
+// key (root version 1). The structural verdict above is what a holder of no key
+// sees; this is what the key adds.
+//
+// Either Error is set (the segment could not even be keyed) or the scan fields
+// are. SegmentKeyHex is the derived K_seg for the header as it appears in the
+// file, which lets an implementation check its HKDF independently of its AEAD.
+type keyedExpectation struct {
+	Error              string `json:"error,omitempty"`
+	SegmentKeyHex      string `json:"segment_key_hex,omitempty"`
+	StopReason         string `json:"stop_reason,omitempty"`
+	FramesRetained     *int   `json:"frames_retained,omitempty"`
+	StopOffset         *int   `json:"stop_offset,omitempty"`
+	PlaintextSHA256Hex string `json:"plaintext_sha256_hex,omitempty"`
+}
+
+// bindingExpectation is the verdict of checking the segments in a vector
+// against its manifest (VerifyMembersAgainstManifest).
+type bindingExpectation struct {
+	Match bool   `json:"match"`
+	Field string `json:"mismatched_field,omitempty"`
 }
 
 type headerExpectation struct {
@@ -160,12 +207,17 @@ type obdExtExpectation struct {
 }
 
 func main() {
-	out := flag.String("out", "../fixtures/format-v2", "output directory for the vectors")
+	out := flag.String("out", "../fixtures/format-v3", "output directory for the vectors")
 	flag.Parse()
 
 	if err := run(*out); err != nil {
 		log.Fatal(err)
 	}
+}
+
+type builder struct {
+	name string
+	fn   func(string, ed25519.PrivateKey, ed25519.PrivateKey) error
 }
 
 func run(outDir string) error {
@@ -176,39 +228,53 @@ func run(outDir string) error {
 	devicePriv := ed25519.NewKeyFromSeed(deviceKeySeed)
 	serverPriv := ed25519.NewKeyFromSeed(serverKeySeed)
 
-	builders := []func(string, ed25519.PrivateKey, ed25519.PrivateKey) error{
-		vectorValidMinimal,
-		vectorValidMultiSegment,
-		vectorTornTailMidFrame,
-		vectorTornTailMidHeader,
-		vectorBadFrameCRC,
-		vectorChainBreakSpliced,
-		vectorSeqGap,
-		vectorBadHeaderCRC,
-		vectorUnknownRecordType,
-		vectorClockJump,
-		vectorGNSSGap,
-		vectorEmptySegment,
-		vectorMaxFrame,
-		vectorMerkleEmpty,
-		vectorMerkleOddLeaves,
-		vectorContentRootMemberOrder,
-		vectorManifestValid,
-		vectorManifestBadSignature,
-		vectorReceiptValid,
-		vectorReceiptWrongContentRoot,
-		vectorPolicySnapshot,
-		vectorTripEventTypes,
-		vectorHealthBitmap,
-		vectorOBDExtended,
-		vectorUpdateDescriptorValid,
-		vectorUpdateDescriptorBadSignature,
+	// The name labels each vector's nonce streams, so adding or reordering a
+	// vector never changes the bytes of another.
+	builders := []builder{
+		{"valid-minimal", vectorValidMinimal},
+		{"valid-multi-segment", vectorValidMultiSegment},
+		{"journal-segment", vectorJournalSegment},
+		{"torn-tail-mid-frame", vectorTornTailMidFrame},
+		{"torn-tail-mid-header", vectorTornTailMidHeader},
+		{"bad-frame-crc", vectorBadFrameCRC},
+		{"chain-break-spliced", vectorChainBreakSpliced},
+		{"seq-gap", vectorSeqGap},
+		{"bad-header-crc", vectorBadHeaderCRC},
+		{"auth-tag-tampered", vectorAuthTagTampered},
+		{"frame-moved-between-segments", vectorFrameMoved},
+		{"wrong-vehicle-key", vectorWrongVehicleKey},
+		{"wrong-key-version", vectorWrongKeyVersion},
+		{"unknown-record-type", vectorUnknownRecordType},
+		{"clock-jump", vectorClockJump},
+		{"gnss-gap", vectorGNSSGap},
+		{"empty-segment", vectorEmptySegment},
+		{"max-frame", vectorMaxFrame},
+		{"merkle-empty", vectorMerkleEmpty},
+		{"merkle-odd-leaves", vectorMerkleOddLeaves},
+		{"content-root-member-order", vectorContentRootMemberOrder},
+		{"manifest-valid", vectorManifestValid},
+		{"manifest-bad-signature", vectorManifestBadSignature},
+		{"manifest-members-match", vectorManifestMembersMatch},
+		{"manifest-segment-header-mismatch", vectorManifestSegmentMismatch},
+		{"receipt-valid", vectorReceiptValid},
+		{"receipt-wrong-content-root", vectorReceiptWrongContentRoot},
+		{"policy-snapshot", vectorPolicySnapshot},
+		{"trip-event-types", vectorTripEventTypes},
+		{"health-bitmap", vectorHealthBitmap},
+		{"obd-extended", vectorOBDExtended},
+		{"update-descriptor-valid", vectorUpdateDescriptorValid},
+		{"update-descriptor-bad-signature", vectorUpdateDescriptorBadSignature},
 	}
 
-	for _, build := range builders {
-		if err := build(outDir, devicePriv, serverPriv); err != nil {
-			return err
+	for _, b := range builders {
+		vecName, writerSeq = b.name, 0
+		if err := b.fn(outDir, devicePriv, serverPriv); err != nil {
+			return fmt.Errorf("%s: %w", b.name, err)
 		}
+	}
+
+	if err := writeKeys(outDir); err != nil {
+		return err
 	}
 
 	if err := writeIndex(outDir, len(builders)); err != nil {
@@ -243,17 +309,38 @@ func writeVector(dir, name string, exp *expectation, files map[string][]byte) er
 }
 
 func testHeader(segmentIndex uint32) format.SegmentHeader {
-	var dev, boot [16]byte
+	var dev, boot, veh, asg [16]byte
 	for i := range dev {
 		dev[i] = byte(0x10 + i)
 		boot[i] = byte(0xA0 + i)
+		veh[i] = byte(0x30 + i)
+		asg[i] = byte(0x50 + i)
 	}
 	return format.SegmentHeader{
 		DeviceID:          dev,
 		BootID:            boot,
+		VehicleID:         veh,
+		AssignmentID:      asg,
 		SegmentIndex:      segmentIndex,
 		OpenedMonotonicUS: fixedOpenedMonoUS,
+		StorageKeyVersion: vectorKeyVersion,
+		DeviceCounter:     vectorDeviceCounter,
 	}
+}
+
+// vecName and writerSeq label the nonce stream of each writer: the vector it
+// belongs to and its ordinal within it. Together they make every writer's
+// nonces unique and independent of every other vector.
+var (
+	vecName   string
+	writerSeq int
+)
+
+// newWriter starts a segment under the vector key with deterministic nonces.
+func newWriter(h format.SegmentHeader, state format.ScanState) (*format.SegmentWriter, error) {
+	writerSeq++
+	label := fmt.Sprintf("%s/%d", vecName, writerSeq)
+	return format.NewSegmentWriter(h, state, keys, testbundle.NonceReader(label))
 }
 
 func gnssPayload(latE7, lonE7 int32) []byte {
@@ -276,7 +363,10 @@ func gnssPayload(latE7, lonE7 int32) []byte {
 
 // buildSegment writes n 1 Hz GNSS samples.
 func buildSegment(segmentIndex uint32, state format.ScanState, n int) (*format.SegmentWriter, error) {
-	w := format.NewSegmentWriter(testHeader(segmentIndex), state)
+	w, err := newWriter(testHeader(segmentIndex), state)
+	if err != nil {
+		return nil, err
+	}
 	for i := 0; i < n; i++ {
 		p := gnssPayload(int32(340_000_000+i*100), int32(-1_185_000_000+i*100))
 		if err := w.Append(format.RecordGNSSSample, 1, 0, uint32(i*1000), p); err != nil {
@@ -286,11 +376,11 @@ func buildSegment(segmentIndex uint32, state format.ScanState, n int) (*format.S
 	return w, nil
 }
 
-// scanExpect derives the expectation from the reference scanner. The reference
-// implementation defines the expected verdict; the specification defines the
-// reference implementation.
+// scanExpect derives the structural expectation from the reference scanner:
+// what a holder of no key sees. The reference implementation defines the
+// expected verdict; the specification defines the reference implementation.
 func scanExpect(b []byte, state format.ScanState) (*scanExpectation, error) {
-	res, err := format.ScanSegment(b, state)
+	res, err := format.ScanSegment(b, state, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -317,6 +407,64 @@ func scanExpect(b []byte, state format.ScanState) (*scanExpectation, error) {
 	return exp, nil
 }
 
+// keyedExpect scans with the vector key and records the verdict. A segment the
+// provider cannot key is an expected outcome for some vectors, so it is recorded
+// as a named error instead of failing generation.
+func keyedExpect(b []byte, state format.ScanState) (*keyedExpectation, error) {
+	out := &keyedExpectation{}
+
+	res, err := format.ScanSegment(b, state, keys)
+	switch {
+	case errors.Is(err, format.ErrKeyVersionMismatch):
+		out.Error = "KEY_VERSION_MISMATCH"
+		return out, nil
+	case errors.Is(err, format.ErrNoKey):
+		out.Error = "NO_KEY"
+		return out, nil
+	case err != nil:
+		return nil, err
+	}
+
+	// Only reported when the verifier can actually key the segment: a key it was
+	// refused is not one a conformance runner should be checking against.
+	k, err := format.DeriveSegmentKey(rootKey, &res.Header)
+	if err != nil {
+		return nil, err
+	}
+	out.SegmentKeyHex = hex.EncodeToString(k[:])
+
+	n := len(res.Frames)
+	out.StopReason = res.Stop.String()
+	out.FramesRetained = &n
+	out.StopOffset = &res.StopOffset
+
+	// Digest over each retained plaintext as u32le(len) || payload, so an
+	// implementation proves it decrypted every frame to the exact bytes without
+	// the vector carrying the plaintext twice.
+	h := sha256.New()
+	for i := range res.Frames {
+		var l [4]byte
+		binary.LittleEndian.PutUint32(l[:], uint32(len(res.Frames[i].Payload)))
+		h.Write(l[:])
+		h.Write(res.Frames[i].Payload)
+	}
+	out.PlaintextSHA256Hex = hex.EncodeToString(h.Sum(nil))
+	return out, nil
+}
+
+// scanBoth derives the structural and keyed expectations together.
+func scanBoth(b []byte, state format.ScanState) (*scanExpectation, *keyedExpectation, error) {
+	exp, err := scanExpect(b, state)
+	if err != nil {
+		return nil, nil, err
+	}
+	keyed, err := keyedExpect(b, state)
+	if err != nil {
+		return nil, nil, err
+	}
+	return exp, keyed, nil
+}
+
 func segmentFiles(b []byte) map[string][]byte {
 	return map[string][]byte{"segment.bin": b}
 }
@@ -324,7 +472,10 @@ func segmentFiles(b []byte) map[string][]byte {
 // ─── segment vectors ────────────────────────────────────────────────────────
 
 func vectorValidMinimal(dir string, _, _ ed25519.PrivateKey) error {
-	w := format.NewSegmentWriter(testHeader(0), format.ScanState{})
+	w, err := newWriter(testHeader(0), format.ScanState{})
+	if err != nil {
+		return err
+	}
 	types := []format.RecordType{
 		format.RecordGNSSSample, format.RecordIMUSummary, format.RecordIMURawWindow,
 		format.RecordOBDSnapshot, format.RecordDeviceHealth, format.RecordTripEvent,
@@ -337,7 +488,7 @@ func vectorValidMinimal(dir string, _, _ ed25519.PrivateKey) error {
 		}
 	}
 
-	exp, err := scanExpect(w.Bytes(), format.ScanState{})
+	exp, keyed, err := scanBoth(w.Bytes(), format.ScanState{})
 	if err != nil {
 		return err
 	}
@@ -345,6 +496,7 @@ func vectorValidMinimal(dir string, _, _ ed25519.PrivateKey) error {
 		Description: "One frame of each defined record type, cleanly sealed.",
 		Asserts:     "Every record type is parsed and the scan reaches EOF with nothing discarded.",
 		Scan:        exp,
+		Keyed:       keyed,
 	}, segmentFiles(w.Bytes()))
 }
 
@@ -361,11 +513,17 @@ func vectorValidMultiSegment(dir string, _, _ ed25519.PrivateKey) error {
 	}
 	seg1 := append([]byte(nil), w1.Bytes()...)
 
-	exp0, err := scanExpect(seg0, format.ScanState{})
+	exp0, keyed0, err := scanBoth(seg0, format.ScanState{})
 	if err != nil {
 		return err
 	}
-	exp1, err := scanExpect(seg1, w0.NextState())
+	exp1, keyed1, err := scanBoth(seg1, w0.NextState())
+	if err != nil {
+		return err
+	}
+	// Keyed scanning of segment 1 from the zero state must also break the chain;
+	// the structural verdict is recorded for that so a runner can check it.
+	expZero, _, err := scanBoth(seg1, format.ScanState{})
 	if err != nil {
 		return err
 	}
@@ -377,11 +535,13 @@ func vectorValidMultiSegment(dir string, _, _ ed25519.PrivateKey) error {
 
 	// Both segments' expectations, keyed so a runner can check each in turn.
 	type multi struct {
-		Name        string            `json:"name"`
-		Description string            `json:"description"`
-		Asserts     string            `json:"asserts"`
-		Segments    []scanExpectation `json:"segments"`
-		Note        string            `json:"note"`
+		Name              string             `json:"name"`
+		Description       string             `json:"description"`
+		Asserts           string             `json:"asserts"`
+		Segments          []scanExpectation  `json:"segments"`
+		Keyed             []keyedExpectation `json:"keyed"`
+		Segment1ZeroState scanExpectation    `json:"segment_1_from_zero_state"`
+		Note              string             `json:"note"`
 	}
 
 	encoded, err := json.MarshalIndent(multi{
@@ -390,8 +550,10 @@ func vectorValidMultiSegment(dir string, _, _ ed25519.PrivateKey) error {
 		Asserts: "Sequence numbers are contiguous across the rotation and the first frame of " +
 			"segment 1 chains to the last frame of segment 0. Scanning segment 1 from the zero " +
 			"state must report CHAIN_BREAK rather than silently accepting it.",
-		Segments: []scanExpectation{*exp0, *exp1},
-		Note:     "Scan segment-1.bin with the ScanState returned by segment-0.bin.",
+		Segments:          []scanExpectation{*exp0, *exp1},
+		Keyed:             []keyedExpectation{*keyed0, *keyed1},
+		Segment1ZeroState: *expZero,
+		Note:              "Scan segment-1.bin with the ScanState returned by segment-0.bin.",
 	}, "", "  ")
 	if err != nil {
 		return err
@@ -419,15 +581,16 @@ func vectorTornTailMidFrame(dir string, _, _ ed25519.PrivateKey) error {
 	frameLen := format.FrameOverhead + 32
 	truncated := full[:len(full)-frameLen+20]
 
-	exp, err := scanExpect(truncated, format.ScanState{})
+	exp, keyed, err := scanBoth(truncated, format.ScanState{})
 	if err != nil {
 		return err
 	}
 	return writeVector(dir, "torn-tail-mid-frame", &expectation{
-		Description: "Power cut 20 bytes into the final frame's payload.",
+		Description: "Power cut 20 bytes into the final frame (inside its nonce).",
 		Asserts: "TORN_TAIL. The nine complete frames are retained and exactly 20 bytes are " +
 			"reported discarded. This is the expected outcome of a key-off during a write, not a defect.",
-		Scan: exp,
+		Scan:  exp,
+		Keyed: keyed,
 	}, segmentFiles(truncated))
 }
 
@@ -441,14 +604,15 @@ func vectorTornTailMidHeader(dir string, _, _ ed25519.PrivateKey) error {
 	frameLen := format.FrameOverhead + 32
 	truncated := full[:len(full)-frameLen+10]
 
-	exp, err := scanExpect(truncated, format.ScanState{})
+	exp, keyed, err := scanBoth(truncated, format.ScanState{})
 	if err != nil {
 		return err
 	}
 	return writeVector(dir, "torn-tail-mid-header", &expectation{
-		Description: "Truncation leaving 10 bytes, too few to hold a 24-byte frame envelope.",
+		Description: "Truncation leaving 10 bytes of the final frame, too few to hold a frame (minimum 68 bytes).",
 		Asserts:     "TORN_TAIL with 10 bytes discarded; the two complete frames survive.",
 		Scan:        exp,
+		Keyed:       keyed,
 	}, segmentFiles(truncated))
 }
 
@@ -460,17 +624,18 @@ func vectorBadFrameCRC(dir string, _, _ ed25519.PrivateKey) error {
 	b := append([]byte(nil), w.Bytes()...)
 
 	frameLen := format.FrameOverhead + 32
-	b[format.SegmentHeaderSize+3*frameLen+format.FrameHeaderSize+4] ^= 0x01
+	b[format.SegmentHeaderSize+3*frameLen+format.FrameHeaderSize+format.NonceSize+4] ^= 0x01
 
-	exp, err := scanExpect(b, format.ScanState{})
+	exp, keyed, err := scanBoth(b, format.ScanState{})
 	if err != nil {
 		return err
 	}
 	return writeVector(dir, "bad-frame-crc", &expectation{
-		Description: "A single flipped payload bit inside frame index 3.",
+		Description: "A single flipped ciphertext bit inside frame index 3. The CRC is not repaired.",
 		Asserts: "CORRUPT_FRAME at frame 3. The three preceding frames remain usable: " +
 			"corruption is isolated to one record and does not invalidate earlier data.",
-		Scan: exp,
+		Scan:  exp,
+		Keyed: keyed,
 	}, segmentFiles(b))
 }
 
@@ -486,7 +651,7 @@ func vectorChainBreakSpliced(dir string, _, _ ed25519.PrivateKey) error {
 	spliced := append([]byte{}, full[:cutStart]...)
 	spliced = append(spliced, full[cutStart+frameLen:]...)
 
-	exp, err := scanExpect(spliced, format.ScanState{})
+	exp, keyed, err := scanBoth(spliced, format.ScanState{})
 	if err != nil {
 		return err
 	}
@@ -494,12 +659,16 @@ func vectorChainBreakSpliced(dir string, _, _ ed25519.PrivateKey) error {
 		Description: "Frame index 2 excised from the middle of the segment.",
 		Asserts: "CHAIN_BREAK. Every remaining frame is individually CRC-valid, so only " +
 			"prev_crc32 can detect the splice. This is what the chain field exists for.",
-		Scan: exp,
+		Scan:  exp,
+		Keyed: keyed,
 	}, segmentFiles(spliced))
 }
 
 func vectorSeqGap(dir string, _, _ ed25519.PrivateKey) error {
-	w := format.NewSegmentWriter(testHeader(0), format.ScanState{})
+	w, err := newWriter(testHeader(0), format.ScanState{})
+	if err != nil {
+		return err
+	}
 	if err := w.Append(format.RecordGNSSSample, 1, 0, 0, gnssPayload(340_000_000, -1_185_000_000)); err != nil {
 		return err
 	}
@@ -513,12 +682,12 @@ func vectorSeqGap(dir string, _, _ ed25519.PrivateKey) error {
 		PrevCRC32:     w.NextState().ExpectedPrev,
 		Payload:       gnssPayload(340_000_100, -1_184_999_900),
 	}
-	b, _, err := format.AppendFrame(b, &f)
+	b, _, err = format.AppendFrame(b, &f, w.Cipher())
 	if err != nil {
 		return err
 	}
 
-	exp, err := scanExpect(b, format.ScanState{})
+	exp, keyed, err := scanBoth(b, format.ScanState{})
 	if err != nil {
 		return err
 	}
@@ -526,7 +695,8 @@ func vectorSeqGap(dir string, _, _ ed25519.PrivateKey) error {
 		Description: "A second frame declaring seq 5 instead of 1, with a correct prev_crc32.",
 		Asserts: "SEQ_GAP. The chain is intact and the CRC is valid, so only the sequence " +
 			"check can catch this.",
-		Scan: exp,
+		Scan:  exp,
+		Keyed: keyed,
 	}, segmentFiles(b))
 }
 
@@ -536,9 +706,9 @@ func vectorBadHeaderCRC(dir string, _, _ ed25519.PrivateKey) error {
 		return err
 	}
 	b := append([]byte(nil), w.Bytes()...)
-	b[24] ^= 0xFF // corrupt boot_id, covered by the header CRC
+	b[24] ^= 0xFF // corrupt boot_id, covered by the header CRC (and by every frame's AAD)
 
-	_, scanErr := format.ScanSegment(b, format.ScanState{})
+	_, scanErr := format.ScanSegment(b, format.ScanState{}, keys)
 	if scanErr == nil {
 		return fmt.Errorf("bad-header-crc: expected a scan error")
 	}
@@ -556,7 +726,10 @@ func vectorBadHeaderCRC(dir string, _, _ ed25519.PrivateKey) error {
 }
 
 func vectorUnknownRecordType(dir string, _, _ ed25519.PrivateKey) error {
-	w := format.NewSegmentWriter(testHeader(0), format.ScanState{})
+	w, err := newWriter(testHeader(0), format.ScanState{})
+	if err != nil {
+		return err
+	}
 	if err := w.Append(format.RecordGNSSSample, 1, 0, 0, gnssPayload(340_000_000, -1_185_000_000)); err != nil {
 		return err
 	}
@@ -567,7 +740,7 @@ func vectorUnknownRecordType(dir string, _, _ ed25519.PrivateKey) error {
 		return err
 	}
 
-	exp, err := scanExpect(w.Bytes(), format.ScanState{})
+	exp, keyed, err := scanBoth(w.Bytes(), format.ScanState{})
 	if err != nil {
 		return err
 	}
@@ -576,12 +749,16 @@ func vectorUnknownRecordType(dir string, _, _ ed25519.PrivateKey) error {
 		Asserts: "EOF, three frames retained, unknown_type_count 1. An unknown type is skipped " +
 			"via frame_len, counted and reported — never an error. This is how a newer device stays " +
 			"partially readable by an older decoder, and the frame CRC still applies.",
-		Scan: exp,
+		Scan:  exp,
+		Keyed: keyed,
 	}, segmentFiles(w.Bytes()))
 }
 
 func vectorClockJump(dir string, _, _ ed25519.PrivateKey) error {
-	w := format.NewSegmentWriter(testHeader(0), format.ScanState{})
+	w, err := newWriter(testHeader(0), format.ScanState{})
+	if err != nil {
+		return err
+	}
 
 	var ahead int32 = 5_000
 	forward := gnssPayload(340_000_000, -1_185_000_000)
@@ -598,7 +775,7 @@ func vectorClockJump(dir string, _, _ ed25519.PrivateKey) error {
 		return err
 	}
 
-	exp, err := scanExpect(w.Bytes(), format.ScanState{})
+	exp, keyed, err := scanBoth(w.Bytes(), format.ScanState{})
 	if err != nil {
 		return err
 	}
@@ -607,7 +784,8 @@ func vectorClockJump(dir string, _, _ ed25519.PrivateKey) error {
 		Asserts: "EOF with both frames retained and the sequence undisturbed. Ordering truth is " +
 			"(boot_id, seq); UTC is an annotation carrying its own uncertainty, so a jump is not " +
 			"corruption. The affected sample carries FlagEstimatedUTC and utc_acc_ms 0xFFFF.",
-		Scan: exp,
+		Scan:  exp,
+		Keyed: keyed,
 	}, segmentFiles(w.Bytes()))
 }
 
@@ -617,7 +795,10 @@ func vectorGNSSGap(dir string, _, _ ed25519.PrivateKey) error {
 	binary.LittleEndian.PutUint16(gap[4:], 42)
 	gap[6] = 4 // tunnel / obstruction
 
-	w := format.NewSegmentWriter(testHeader(0), format.ScanState{})
+	w, err := newWriter(testHeader(0), format.ScanState{})
+	if err != nil {
+		return err
+	}
 	if err := w.Append(format.RecordGNSSSample, 1, 0, 0, gnssPayload(340_000_000, -1_185_000_000)); err != nil {
 		return err
 	}
@@ -628,7 +809,7 @@ func vectorGNSSGap(dir string, _, _ ed25519.PrivateKey) error {
 		return err
 	}
 
-	exp, err := scanExpect(w.Bytes(), format.ScanState{})
+	exp, keyed, err := scanBoth(w.Bytes(), format.ScanState{})
 	if err != nil {
 		return err
 	}
@@ -636,31 +817,39 @@ func vectorGNSSGap(dir string, _, _ ed25519.PrivateKey) error {
 		Description: "A 42-second tunnel gap between two fixes 1.1 km apart.",
 		Asserts: "The gap record is preserved verbatim. A decoder must render a discontinuity " +
 			"and must never join the route across it — honest incompleteness over fabricated continuity.",
-		Scan: exp,
+		Scan:  exp,
+		Keyed: keyed,
 	}, segmentFiles(w.Bytes()))
 }
 
 func vectorEmptySegment(dir string, _, _ ed25519.PrivateKey) error {
-	w := format.NewSegmentWriter(testHeader(0), format.ScanState{})
+	w, err := newWriter(testHeader(0), format.ScanState{})
+	if err != nil {
+		return err
+	}
 
-	exp, err := scanExpect(w.Bytes(), format.ScanState{})
+	exp, keyed, err := scanBoth(w.Bytes(), format.ScanState{})
 	if err != nil {
 		return err
 	}
 	return writeVector(dir, "empty-segment", &expectation{
-		Description: "A valid 64-byte header with no frames.",
+		Description: "A valid 128-byte header with no frames.",
 		Asserts:     "EOF, zero frames, nothing discarded. An empty segment is valid, not damaged.",
 		Scan:        exp,
+		Keyed:       keyed,
 	}, segmentFiles(w.Bytes()))
 }
 
 func vectorMaxFrame(dir string, _, _ ed25519.PrivateKey) error {
-	w := format.NewSegmentWriter(testHeader(0), format.ScanState{})
+	w, err := newWriter(testHeader(0), format.ScanState{})
+	if err != nil {
+		return err
+	}
 	if err := w.Append(format.RecordIMURawWindow, 1, 0, 0, make([]byte, format.MaxPayloadSize)); err != nil {
 		return err
 	}
 
-	exp, err := scanExpect(w.Bytes(), format.ScanState{})
+	exp, keyed, err := scanBoth(w.Bytes(), format.ScanState{})
 	if err != nil {
 		return err
 	}
@@ -669,7 +858,8 @@ func vectorMaxFrame(dir string, _, _ ed25519.PrivateKey) error {
 		Asserts: fmt.Sprintf("A frame_len of %d is accepted; %d must be rejected as a torn tail "+
 			"rather than trusted, and a frame_len below %d must also be rejected so a scan cannot "+
 			"make zero progress.", format.MaxFrameLen, format.MaxFrameLen+1, format.MinFrameLen),
-		Scan: exp,
+		Scan:  exp,
+		Keyed: keyed,
 	}, segmentFiles(w.Bytes()))
 }
 
@@ -790,7 +980,7 @@ func sampleManifest() (*format.Manifest, error) {
 		DeviceID:                  deviceID,
 		DeviceKeyID:               format.DeviceKeyID(ed25519.NewKeyFromSeed(deviceKeySeed).Public().(ed25519.PublicKey)),
 		BootID:                    bootID,
-		FirmwareVersion:           "cairn-v2.0.0",
+		FirmwareVersion:           "cairn-v3.0.0",
 		SchemaVersion:             1,
 		CaptureStartedMonotonicUS: fixedOpenedMonoUS,
 		CaptureEndedMonotonicUS:   1_800_000_000,
@@ -818,6 +1008,12 @@ func sampleManifest() (*format.Manifest, error) {
 
 		HasTripSeq: true,
 		TripSeq:    42,
+
+		VehicleID:         testHeader(0).VehicleID,
+		AssignmentID:      testHeader(0).AssignmentID,
+		DeviceCounter:     vectorDeviceCounter,
+		StorageKeyVersion: vectorKeyVersion,
+		EncryptionSuite:   format.EncryptionSuiteV1,
 	}, nil
 }
 
@@ -964,46 +1160,8 @@ func sampleReceipt(contentRoot [32]byte) *format.Receipt {
 // ─── index ──────────────────────────────────────────────────────────────────
 
 func writeIndex(dir string, count int) error {
-	readme := fmt.Sprintf(`# Bundle format v2 conformance vectors
-
-Generated by `+"`server/cmd/mkvectors`"+`. Do not edit by hand — regenerate with:
-
-    cd server && go run ./cmd/mkvectors -out ../fixtures/format-v2
-
-%d vectors. Each directory holds the input bytes plus an `+"`expected.json`"+`
-stating the verdict and derived values. A conformance runner needs no knowledge
-of any particular implementation: the inputs and expectations together define
-the behaviour that docs/bundle-format-v2.md specifies.
-
-An implementation is conformant when it produces the stated verdict for every
-vector, and byte-identical output for the encoding vectors.
-
-Generation is deterministic. Keys come from fixed seeds and every timestamp is a
-constant, so regenerating produces an empty diff. The keys are test artifacts
-and never sign anything real.
-
-## Reading a vector
-
-| File | Meaning |
-|---|---|
-| `+"`segment.bin`"+` | A segment to scan. Start with the zero ScanState unless the expectation says otherwise. |
-| `+"`segment-N.bin`"+` | Multi-segment vectors. Scan in order, threading each scan's resulting state into the next. |
-| `+"`manifest.cbor`"+` / `+"`manifest.sig`"+` | Deterministic CBOR manifest and its detached Ed25519 signature. |
-| `+"`receipt.cbor`"+` | A server receipt, signature inline at key 11. |
-| `+"`members.json`"+` | Member list for content-root vectors. |
-| `+"`expected.json`"+` | The verdict. |
-
-## Stop reasons
-
-| Reason | Meaning |
-|---|---|
-| `+"`EOF`"+` | Clean: the whole segment parsed. |
-| `+"`TORN_TAIL`"+` | Ends mid-frame. Expected after a power cut; frames before the tear are retained. |
-| `+"`CORRUPT_FRAME`"+` | A frame CRC mismatched. Corruption is isolated to that frame. |
-| `+"`CHAIN_BREAK`"+` | prev_crc32 did not match: a record was removed, reordered or spliced. |
-| `+"`SEQ_GAP`"+` | The sequence number skipped a value. |
-`, count)
-
+	readme := fmt.Sprintf(readmeTemplate, count, hex.EncodeToString(rootKey[:]), vectorKeyVersion,
+		hex.EncodeToString(altRootKey[:]), altKeyVersion)
 	return os.WriteFile(filepath.Join(dir, "README.md"), []byte(readme), 0o644)
 }
 
@@ -1075,7 +1233,10 @@ func vectorTripEventTypes(dir string, _, _ ed25519.PrivateKey) error {
 		{200, 340000500, -1185000500, "from newer firmware"},
 	}
 
-	w := format.NewSegmentWriter(testHeader(0), format.ScanState{})
+	w, err := newWriter(testHeader(0), format.ScanState{})
+	if err != nil {
+		return err
+	}
 
 	var expected []expectedEvent
 	for i, sp := range specs {
@@ -1095,7 +1256,7 @@ func vectorTripEventTypes(dir string, _, _ ed25519.PrivateKey) error {
 		})
 	}
 
-	exp, err := scanExpect(w.Bytes(), format.ScanState{})
+	exp, keyed, err := scanBoth(w.Bytes(), format.ScanState{})
 	if err != nil {
 		return err
 	}
@@ -1108,7 +1269,8 @@ func vectorTripEventTypes(dir string, _, _ ed25519.PrivateKey) error {
 			"cornering are indistinguishable without the mounting orientation " +
 			"or a speed signal, and a guessed label would be indistinguishable " +
 			"from a measured one. An unknown type is named, never discarded.",
-		Scan: exp,
+		Scan:  exp,
+		Keyed: keyed,
 		Events: &eventsExpectation{
 			Events: expected,
 			Note: "lat_e7/lon_e7 are zero when no valid fix was available; " +
@@ -1132,7 +1294,10 @@ func vectorHealthBitmap(dir string, _, _ ed25519.PrivateKey) error {
 		format.HealthDegradedTime | 0x80,
 	}
 
-	w := format.NewSegmentWriter(testHeader(0), format.ScanState{})
+	w, err := newWriter(testHeader(0), format.ScanState{})
+	if err != nil {
+		return err
+	}
 
 	var expected []expectedHealth
 	for i, st := range states {
@@ -1150,7 +1315,7 @@ func vectorHealthBitmap(dir string, _, _ ed25519.PrivateKey) error {
 		expected = append(expected, expectedHealth{HealthState: st, Names: names})
 	}
 
-	exp, err := scanExpect(w.Bytes(), format.ScanState{})
+	exp, keyed, err := scanBoth(w.Bytes(), format.ScanState{})
 	if err != nil {
 		return err
 	}
@@ -1163,7 +1328,8 @@ func vectorHealthBitmap(dir string, _, _ ed25519.PrivateKey) error {
 			"battery must not hide an unavailable fix. An unknown bit is " +
 			"preserved rather than masked, so a bundle from newer firmware stays " +
 			"interpretable for the conditions this build does understand.",
-		Scan: exp,
+		Scan:  exp,
+		Keyed: keyed,
 		Health: &healthExpectation{
 			Records: expected,
 			Note:    "0x00 means no condition on the list is active, which is not the same as healthy in every respect.",
@@ -1191,13 +1357,16 @@ func obdExtPayload(mapKpa, mafCgps, lambdaE4, absLoadRaw uint16,
 	return p
 }
 
-func ptrU16(v uint16) *uint16  { return &v }
-func ptrU8(v uint8) *uint8    { return &v }
-func ptrI8(v int8) *int8      { return &v }
+func ptrU16(v uint16) *uint16   { return &v }
+func ptrU8(v uint8) *uint8      { return &v }
+func ptrI8(v int8) *int8        { return &v }
 func ptrF64(v float64) *float64 { return &v }
 
 func vectorOBDExtended(dir string, _, _ ed25519.PrivateKey) error {
-	w := format.NewSegmentWriter(testHeader(0), format.ScanState{})
+	w, err := newWriter(testHeader(0), format.ScanState{})
+	if err != nil {
+		return err
+	}
 
 	// Record 0: full boost scenario.
 	// MAP 230 kPa, baro 101 kPa → 129 kPa gauge → 18.71 psi.
@@ -1222,15 +1391,15 @@ func vectorOBDExtended(dir string, _, _ ed25519.PrivateKey) error {
 		return err
 	}
 
-	exp, err := scanExpect(w.Bytes(), format.ScanState{})
+	exp, keyed, err := scanBoth(w.Bytes(), format.ScanState{})
 	if err != nil {
 		return err
 	}
 
 	// Derived values for record 0.
 	boostPSI0 := float64(230-101) * 0.1450377   // 18.71 psi
-	lambda0 := float64(28836) / 10000.0          // 0.8836 (ten-thousandths resolution)
-	absLoadPct0 := float64(484) * 100.0 / 255.0  // 189.80%
+	lambda0 := float64(28836) / 10000.0         // 0.8836 (ten-thousandths resolution)
+	absLoadPct0 := float64(484) * 100.0 / 255.0 // 189.80%
 
 	// Derived values for record 2.
 	lambda2 := float64(27852) / 10000.0 // 0.7852 (ten-thousandths)
@@ -1243,7 +1412,7 @@ func vectorOBDExtended(dir string, _, _ ed25519.PrivateKey) error {
 			FuelTrimShortPct: ptrI8(-5), FuelTrimLongPct: ptrI8(18),
 			PIDsRequested: 6, PIDsAnswered: 6, PollCadenceMS: 200,
 			MAPSaturated: false,
-			BoostPSI: ptrF64(boostPSI0), Lambda: ptrF64(lambda0),
+			BoostPSI:     ptrF64(boostPSI0), Lambda: ptrF64(lambda0),
 			AbsLoadPct: ptrF64(absLoadPct0),
 		},
 		{
@@ -1254,7 +1423,7 @@ func vectorOBDExtended(dir string, _, _ ed25519.PrivateKey) error {
 			MAPkPa: ptrU16(255), LambdaE4: ptrU16(27852),
 			PIDsRequested: 2, PIDsAnswered: 2, PollCadenceMS: 200,
 			MAPSaturated: true,
-			Lambda: ptrF64(lambda2),
+			Lambda:       ptrF64(lambda2),
 		},
 	}
 
@@ -1263,7 +1432,8 @@ func vectorOBDExtended(dir string, _, _ ed25519.PrivateKey) error {
 		Asserts: "Every field decodes to the expected value or is absent when sentinel. " +
 			"MAPSaturated is true only when MAP is 255 kPa. BoostPSI requires both MAP " +
 			"and baro; with either absent it is uncomputable, not assumed from sea level.",
-		Scan: exp,
+		Scan:  exp,
+		Keyed: keyed,
 		OBDExt: &obdExtExpectation{
 			Records: records,
 			Note: "Sentinels: u16 0xFFFF, u8 0xFF, i8 0x80 (-128). A sentinel field " +

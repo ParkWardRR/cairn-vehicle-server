@@ -27,13 +27,16 @@ import (
 	"time"
 
 	"github.com/ParkWardRR/Cairn/server/internal/cas"
+	"github.com/ParkWardRR/Cairn/server/internal/counters"
 	"github.com/ParkWardRR/Cairn/server/internal/devices"
 	"github.com/ParkWardRR/Cairn/server/internal/httpapi"
 	"github.com/ParkWardRR/Cairn/server/internal/intake"
+	"github.com/ParkWardRR/Cairn/server/internal/keystore"
 	"github.com/ParkWardRR/Cairn/server/internal/ledger"
 	"github.com/ParkWardRR/Cairn/server/internal/mtls"
 	"github.com/ParkWardRR/Cairn/server/internal/outbox"
 	"github.com/ParkWardRR/Cairn/server/internal/receipts"
+	"github.com/ParkWardRR/Cairn/server/internal/vehicles"
 )
 
 func main() {
@@ -57,13 +60,21 @@ func main() {
 		enroll     = flag.String("enroll", "", "enrol a device: hex device ID (requires -enroll-key)")
 		enrollKey  = flag.String("enroll-key", "", "hex Ed25519 public key for -enroll")
 		enrollName = flag.String("enroll-name", "", "friendly name for -enroll")
-		revoke     = flag.String("revoke", "", "revoke a device: hex device ID")
-		revokeWhy  = flag.String("revoke-reason", "revoked by operator", "reason recorded with -revoke")
-		list       = flag.Bool("list-devices", false, "list enrolled devices and exit")
+		enrollRoot = flag.String("enroll-root", "",
+			"hex 32-byte device storage root to escrow with -enroll (required: bundles are encrypted)")
+		enrollKeyVersion = flag.Uint("enroll-key-version", 1, "storage_key_version of -enroll-root")
+		keystoreMaster   = flag.String("keystore-master", "",
+			"keystore master key file; keep it OUTSIDE the backed-up data directory. "+
+				"Defaults to <data>/keys/keystore.master, which defeats that separation and is only acceptable for development")
+		revoke    = flag.String("revoke", "", "revoke a device: hex device ID")
+		revokeWhy = flag.String("revoke-reason", "revoked by operator", "reason recorded with -revoke")
+		list      = flag.Bool("list-devices", false, "list enrolled devices and exit")
 
 		printReceiptKey = flag.Bool("print-receipt-key", false,
 			"print the receipt-signing public key and exit (this is the value a device pins)")
 	)
+	var app appFlags
+	registerAppFlags(&app)
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -79,6 +90,10 @@ func main() {
 		enroll:          *enroll,
 		enrollKey:       *enrollKey,
 		enrollName:      *enrollName,
+		enrollRoot:      *enrollRoot,
+		enrollKeyVer:    uint32(*enrollKeyVersion),
+		keystoreMaster:  *keystoreMaster,
+		app:             app,
 		revoke:          *revoke,
 		revokeWhy:       *revokeWhy,
 		list:            *list,
@@ -100,9 +115,15 @@ type runConfig struct {
 	receiptKey   string
 	dev          bool
 
-	enroll      string
-	enrollKey   string
-	enrollName  string
+	enroll       string
+	enrollKey    string
+	enrollName   string
+	enrollRoot   string
+	enrollKeyVer uint32
+
+	keystoreMaster string
+
+	app         appFlags
 	revoke      string
 	revokeWhy   string
 	list        bool
@@ -141,13 +162,36 @@ func run(cfg runConfig) error {
 		return fmt.Errorf("open device registry: %w", err)
 	}
 
+	// The v3 binding state. All three are required by intake; none is optional,
+	// because a nil here would silently switch off a security check.
+	vehicleReg, err := vehicles.Open(
+		filepath.Join(cfg.dataDir, "vehicles.json"),
+		filepath.Join(cfg.dataDir, "keys", "vehicles.key"))
+	if err != nil {
+		return fmt.Errorf("open vehicle registry: %w", err)
+	}
+	counterGuard, err := counters.Open(filepath.Join(cfg.dataDir, "counters.json"))
+	if err != nil {
+		return fmt.Errorf("open counter guard: %w", err)
+	}
+	masterPath := cfg.keystoreMaster
+	if masterPath == "" {
+		masterPath = filepath.Join(cfg.dataDir, "keys", "keystore.master")
+		cfg.log.Warn("keystore master key is inside the data directory; a backup of that directory " +
+			"would carry the key to every escrowed storage root — pass -keystore-master pointing elsewhere")
+	}
+	keyStore, err := keystore.Open(filepath.Join(cfg.dataDir, "keystore.json"), masterPath)
+	if err != nil {
+		return fmt.Errorf("open keystore: %w", err)
+	}
+
 	// Administrative modes run and exit, so enrolment never needs the service
 	// to be stopped.
 	switch {
 	case cfg.list:
 		return listDevices(registry)
 	case cfg.enroll != "":
-		return enrollDevice(registry, cfg)
+		return enrollDevice(registry, keyStore, counterGuard, cfg)
 	case cfg.revoke != "":
 		return revokeDevice(registry, cfg)
 	}
@@ -205,6 +249,9 @@ func run(cfg runConfig) error {
 		Outbox:   queue,
 		Ledger:   book,
 		OfferDir: filepath.Join(cfg.dataDir, "offers"),
+		Vehicles: vehicleReg,
+		Counters: counterGuard,
+		Keys:     keyStore,
 	})
 	if err != nil {
 		return fmt.Errorf("create intake service: %w", err)
@@ -285,6 +332,17 @@ func run(cfg runConfig) error {
 	defer stop()
 	go housekeep(ctx, svc, limiter, cfg.log)
 
+	// The app API, when enabled, runs beside the device listener on its own
+	// port. It has its own limiter: a phone retrying must never spend a
+	// dongle's allowance.
+	var stopApp func(context.Context) error
+	if cfg.app.addr != "" || cfg.app.serveAddr != "" {
+		stopApp, err = startApp(cfg.app, cfg, registry, vehicleReg, httpapi.NewLimiter(240, 4), cfg.log)
+		if err != nil {
+			return fmt.Errorf("start app API: %w", err)
+		}
+	}
+
 	errCh := make(chan error, 1)
 	go func() {
 		var err error
@@ -311,6 +369,9 @@ func run(cfg runConfig) error {
 		// it complete saves the retry.
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+		if stopApp != nil {
+			_ = stopApp(shutdownCtx)
+		}
 		return srv.Shutdown(shutdownCtx)
 	}
 }
@@ -361,7 +422,18 @@ func listDevices(registry *devices.Registry) error {
 	return nil
 }
 
-func enrollDevice(registry *devices.Registry, cfg runConfig) error {
+func enrollDevice(registry *devices.Registry, keys *keystore.Store, guard *counters.Guard, cfg runConfig) error {
+	if cfg.enrollRoot == "" {
+		return errors.New("-enroll requires -enroll-root (hex 32-byte storage root): " +
+			"v3 bundles are encrypted and the server cannot decode a device it holds no root for")
+	}
+	rootRaw, err := hex.DecodeString(cfg.enrollRoot)
+	if err != nil || len(rootRaw) != 32 {
+		return fmt.Errorf("storage root must be 64 hex characters (32 bytes)")
+	}
+	var root [32]byte
+	copy(root[:], rootRaw)
+
 	if cfg.enrollKey == "" {
 		return errors.New("-enroll requires -enroll-key (hex Ed25519 public key)")
 	}
@@ -389,7 +461,20 @@ func enrollDevice(registry *devices.Registry, cfg runConfig) error {
 		return fmt.Errorf("enrol device: %w", err)
 	}
 
+	if err := keys.Put(d.DeviceID, cfg.enrollKeyVer, root); err != nil {
+		return fmt.Errorf("escrow storage root: %w", err)
+	}
+
+	// A re-enrolled device must resume above the counters it already spent.
+	floor, err := guard.Resume(d.DeviceID)
+	if err != nil {
+		return fmt.Errorf("counter floor: %w", err)
+	}
+
 	fmt.Printf("enrolled %s (%s) with key ID %s\n", d.DeviceID, d.Name, d.KeyIDHex)
+	fmt.Printf("storage root escrowed as key version %d\n", cfg.enrollKeyVer)
+	fmt.Printf("counter floor: the device must start its bundle counter above %d\n", floor)
+	fmt.Println("next: assign it to a vehicle (cairn-admin assign) — bundles from an unassigned device are refused")
 	return nil
 }
 

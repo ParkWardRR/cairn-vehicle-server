@@ -8,7 +8,7 @@
 # SD card data reaches this host as a mirror of the card's bundles/ directory at
 # /var/lib/cairn-tsdb/sd/bundles. Bundles also present in the CAS are
 # deduplicated on content root, so mirroring the card again is harmless.
-Description=Cairn in-memory time-series store
+Description=Cairn in-memory time-series store (decrypts v3 bundles)
 Documentation=https://github.com/ParkWardRR/Cairn
 After=cairn-server.service
 
@@ -17,6 +17,11 @@ Type=simple
 User=cairn
 Group=cairn
 
+# v3 bundles are encrypted, so the store needs the escrowed storage roots to
+# decode them: the keystore file (read-only, in the server's data directory) and
+# the master key, which is handed over as a credential and never written here.
+LoadCredential=keystore-master:/etc/cairn/keystore.master
+
 # Loopback by default: the data includes GNSS positions, and the endpoint takes
 # caller-supplied SQL. To bind to a non-loopback address, TLS must be configured
 # — the binary refuses to listen on a routable address without it.
@@ -24,6 +29,8 @@ Group=cairn
 # Loopback (plain HTTP, ssh tunnel required):
 ExecStart=/usr/local/bin/cairn-tsdb \
     -data /var/lib/cairn \
+    -keystore /var/lib/cairn/keystore.json \
+    -keystore-master %d/keystore-master \
     -sd /var/lib/cairn-tsdb/sd \
     -addr 127.0.0.1:8480 \
     -memory 2GB \
@@ -32,6 +39,8 @@ ExecStart=/usr/local/bin/cairn-tsdb \
 # mTLS (reuses the ingest server's private CA and certs):
 # ExecStart=/usr/local/bin/cairn-tsdb \
 #     -data /var/lib/cairn \
+#     -keystore /var/lib/cairn/keystore.json \
+#     -keystore-master %d/keystore-master \
 #     -sd /var/lib/cairn-tsdb/sd \
 #     -addr :8480 \
 #     -tls-cert /etc/cairn/certs/server.pem \

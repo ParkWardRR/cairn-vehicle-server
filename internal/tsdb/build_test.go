@@ -44,7 +44,7 @@ func buildFromSD(t *testing.T, sd string) *DB {
 	}
 	t.Cleanup(func() { snap.Close() })
 
-	db, err := Build(context.Background(), snap, notes, Options{MemoryLimit: "512MB", Threads: 2})
+	db, err := Build(context.Background(), snap, notes, Options{MemoryLimit: "512MB", Threads: 2, Keys: testbundle.Keys()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,13 +67,13 @@ func TestGoldenDigests(t *testing.T) {
 		{
 			name:   "default",
 			opts:   testbundle.Default(),
-			digest: "5e39bde0c1e1667c92c479b55e1d0594e1c6c60d4ab3e160ba9118e46cdfdf41",
+			digest: "37b4f1bc9adc96bd15ffa5b7fb0475aaf45d55b9c0ce97674c9b977811084260",
 			rows:   Counts{Position: 12, OBD: 7, Transition: 4},
 		},
 		{
 			name:   "gap-and-fixless",
 			opts:   testbundle.Options{ChunkSize: 256, GNSSSamples: 20, OBDSamples: 5, JournalEntries: 2, GapAfter: 8, FixlessFrom: 15},
-			digest: "fcdd97598131adca4dec154e4602bdd63105ed05c710b05004c1be1b24563ce5",
+			digest: "7760c135d8316d8e97d8c669cddc3d8354ea653bb7c187d10ca78a19e39e9d86",
 			rows:   Counts{Position: 15, OBD: 5, Transition: 2, Gap: 1},
 		},
 	}

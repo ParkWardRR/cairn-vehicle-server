@@ -95,18 +95,23 @@ func BenchmarkHardwareMerkle(b *testing.B) {
 	}
 }
 
-// BenchmarkHardwareScanSegment is the end-to-end per-frame path: header CRC,
-// body CRC and the chain check, over a segment built the way the device builds
-// one. This is the number that matters for ingest throughput.
-func BenchmarkHardwareScanSegment(b *testing.B) {
+// benchSegment builds a segment the way the device builds one.
+func benchSegment(b *testing.B, frames int) ([]byte, *format.RootKeyProvider) {
 	var deviceID [16]byte
 	for i := range deviceID {
 		deviceID[i] = byte(0x10 + i)
 	}
 
-	const frames = 4096
+	keys := &format.RootKeyProvider{Version: 1}
+	for i := range keys.Root {
+		keys.Root[i] = byte(i)
+	}
 
-	w := format.NewSegmentWriter(format.SegmentHeader{DeviceID: deviceID}, format.ScanState{})
+	w, err := format.NewSegmentWriter(
+		format.SegmentHeader{DeviceID: deviceID, StorageKeyVersion: 1}, format.ScanState{}, keys, nil)
+	if err != nil {
+		b.Fatal(err)
+	}
 	payload := make([]byte, 32)
 	for i := range payload {
 		payload[i] = byte(i)
@@ -117,14 +122,43 @@ func BenchmarkHardwareScanSegment(b *testing.B) {
 			b.Fatalf("append frame %d: %v", i, err)
 		}
 	}
-	seg := w.Bytes()
+	return w.Bytes(), keys
+}
+
+// BenchmarkHardwareScanSegment is the end-to-end per-frame path without a key:
+// header CRC, body CRC and the chain check. This is the number that matters for
+// structural verification, which needs no key and runs wherever the bytes are.
+func BenchmarkHardwareScanSegment(b *testing.B) {
+	const frames = 4096
+	seg, _ := benchSegment(b, frames)
 
 	b.SetBytes(int64(len(seg)))
 	b.ReportMetric(float64(frames), "frames/op")
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		res, err := format.ScanSegment(seg, format.ScanState{})
+		res, err := format.ScanSegment(seg, format.ScanState{}, nil)
+		if err != nil {
+			b.Fatalf("scan: %v", err)
+		}
+		if len(res.Frames) != frames {
+			b.Fatalf("scanned %d frames, want %d", len(res.Frames), frames)
+		}
+	}
+}
+
+// BenchmarkKeyedScanSegment adds tag verification and decryption of every
+// frame: the cost of reading the records, as ingest and decode pay it.
+func BenchmarkKeyedScanSegment(b *testing.B) {
+	const frames = 4096
+	seg, keys := benchSegment(b, frames)
+
+	b.SetBytes(int64(len(seg)))
+	b.ReportMetric(float64(frames), "frames/op")
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		res, err := format.ScanSegment(seg, format.ScanState{}, keys)
 		if err != nil {
 			b.Fatalf("scan: %v", err)
 		}

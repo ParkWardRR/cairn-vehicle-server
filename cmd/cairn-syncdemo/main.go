@@ -55,7 +55,13 @@ func main() {
 	if *printIdentity {
 		pub, _ := testbundle.DeviceKey()
 		id := testbundle.DeviceID()
-		fmt.Printf("device_id  %s\npublic_key %s\n\n", hex.EncodeToString(id[:]), hex.EncodeToString(pub))
+		root, vehicle, assignment := testbundle.RootKey(), testbundle.VehicleID(), testbundle.AssignmentID()
+		fmt.Printf("device_id  %s\npublic_key %s\n", hex.EncodeToString(id[:]), hex.EncodeToString(pub))
+		// The v3 binding a server needs before it will accept this device's
+		// bundles. These are the PUBLIC test values the synthetic bundles carry.
+		fmt.Printf("storage_root %s\nkey_version %d\nvehicle_id %s\nassignment_id %s\n\n",
+			hex.EncodeToString(root[:]), testbundle.DefaultKeyVersion,
+			hex.EncodeToString(vehicle[:]), hex.EncodeToString(assignment[:]))
 		fmt.Printf("enrol with:\n  cairn-server -data <dir> -enroll %s -enroll-key %s\n",
 			hex.EncodeToString(id[:]), hex.EncodeToString(pub))
 		return

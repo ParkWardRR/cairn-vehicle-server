@@ -35,12 +35,17 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ParkWardRR/Cairn/server/format"
+	"github.com/ParkWardRR/Cairn/server/internal/keystore"
 	"github.com/ParkWardRR/Cairn/server/internal/mtls"
 	"github.com/ParkWardRR/Cairn/server/internal/tsdb"
 )
 
 type config struct {
 	dataDir, sdRoot, scratch, memory string
+
+	// keys decrypts bundles. Built from -keystore and -keystore-master.
+	keys format.KeyProvider
 }
 
 func main() {
@@ -61,7 +66,20 @@ func main() {
 	flag.StringVar(&cfg.sdRoot, "sd", "", "SD card cairn/ directory (sealed v2 bundles); optional")
 	flag.StringVar(&cfg.scratch, "scratch", "", "parent directory for the throwaway CAS (default: system temp)")
 	flag.StringVar(&cfg.memory, "memory", "2GB", "DuckDB memory ceiling")
+	keystorePath := flag.String("keystore", "", "escrowed storage-root file (required: bundles are encrypted)")
+	keystoreMaster := flag.String("keystore-master", "", "keystore master key file (required with -keystore)")
 	flag.Parse()
+
+	if *keystorePath == "" || *keystoreMaster == "" {
+		fmt.Fprintln(os.Stderr, "cairn-tsdb: -keystore and -keystore-master are required; v3 bundles are encrypted")
+		os.Exit(2)
+	}
+	ks, err := keystore.Open(*keystorePath, *keystoreMaster)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cairn-tsdb: open keystore: %v\n", err)
+		os.Exit(1)
+	}
+	cfg.keys = ks.Provider()
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
@@ -197,7 +215,7 @@ func build(ctx context.Context, cfg config) (*tsdb.DB, error) {
 	// the database holds its own copy, so the scratch CAS can go.
 	defer snap.Close()
 
-	return tsdb.Build(ctx, snap, notes, tsdb.Options{MemoryLimit: cfg.memory})
+	return tsdb.Build(ctx, snap, notes, tsdb.Options{MemoryLimit: cfg.memory, Keys: cfg.keys})
 }
 
 type server struct {

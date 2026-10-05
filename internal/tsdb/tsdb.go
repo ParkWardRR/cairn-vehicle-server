@@ -29,6 +29,7 @@ import (
 
 	duckdb "github.com/duckdb/duckdb-go/v2"
 
+	"github.com/ParkWardRR/Cairn/server/format"
 	"github.com/ParkWardRR/Cairn/server/internal/decode"
 )
 
@@ -41,6 +42,10 @@ type Options struct {
 
 	// Threads defaults to GOMAXPROCS.
 	Threads int
+
+	// Keys decrypts bundle segments (v3). Required: the store is built by
+	// decoding, and an encrypted segment cannot be decoded without its key.
+	Keys format.KeyProvider
 }
 
 // DB is a built, locked, queryable store.
@@ -126,7 +131,7 @@ func Build(ctx context.Context, snap *Snapshot, notes []string, opts Options) (*
 
 	report := Report{BuiltAt: started.UTC(), DecoderVer: decode.Version, Notes: notes}
 
-	loaded, err := loadAll(ctx, sdb, snap, &report)
+	loaded, err := loadAll(ctx, sdb, snap, &report, opts.Keys)
 	if err != nil {
 		return fail(err)
 	}
@@ -180,7 +185,7 @@ type expected struct {
 	counts Counts
 }
 
-func loadAll(ctx context.Context, sdb *sql.DB, snap *Snapshot, report *Report) ([]expected, error) {
+func loadAll(ctx context.Context, sdb *sql.DB, snap *Snapshot, report *Report, keys format.KeyProvider) ([]expected, error) {
 	conn, err := sdb.Conn(ctx)
 	if err != nil {
 		return nil, err
@@ -203,7 +208,7 @@ func loadAll(ctx context.Context, sdb *sql.DB, snap *Snapshot, report *Report) (
 			apps[t] = a
 		}
 
-		dec := decode.New(snap.Store)
+		dec := decode.New(snap.Store, keys)
 		for _, ref := range snap.Refs {
 			in := decode.Input{ContentRoot: ref.ContentRoot, ManifestDigest: ref.ManifestDigest}
 

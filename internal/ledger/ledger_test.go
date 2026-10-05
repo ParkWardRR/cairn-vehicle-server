@@ -20,6 +20,7 @@ func TestRejectionsRequireAReason(t *testing.T) {
 	for _, ev := range []Event{
 		EventOfferRejected, EventChunkRejected, EventCommitFailed,
 		EventDecodeFailed, EventQuotaRefused, EventDeviceUnknown,
+		EventAssignmentRefused, EventQuarantined, EventCounterGap, EventKeyMissing,
 	} {
 		if err := l.Append(Entry{Event: ev}); err == nil {
 			t.Errorf("%s was accepted with no reason", ev)

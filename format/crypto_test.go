@@ -169,7 +169,7 @@ func testManifest(t *testing.T) *Manifest {
 		DeviceID:                  deviceID,
 		DeviceKeyID:               [8]byte{1, 2, 3, 4, 5, 6, 7, 8},
 		BootID:                    bootID,
-		FirmwareVersion:           "cairn-v2.0.0",
+		FirmwareVersion:           "cairn-v3.0.0",
 		SchemaVersion:             1,
 		CaptureStartedMonotonicUS: 1_000_000,
 		CaptureEndedMonotonicUS:   1_800_000_000,
@@ -194,6 +194,12 @@ func testManifest(t *testing.T) *Manifest {
 		RecoveryState:      RecoveryRecoveredTail,
 		DiscardedTailBytes: 42,
 		SignatureAlgorithm: SignatureAlgorithmEd25519,
+
+		VehicleID:         testHeader(0).VehicleID,
+		AssignmentID:      testHeader(0).AssignmentID,
+		DeviceCounter:     7,
+		StorageKeyVersion: 1,
+		EncryptionSuite:   EncryptionSuiteV1,
 	}
 }
 

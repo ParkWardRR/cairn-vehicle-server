@@ -86,9 +86,14 @@ func newEnv(t *testing.T) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
+	regs, err := testbundle.OpenRegistries(root)
+	if err != nil {
+		t.Fatal(err)
+	}
 	svc, err := intake.New(intake.Config{
 		CAS: casStore, Receipts: rec, Registry: reg, Outbox: ob,
 		OfferDir: filepath.Join(root, "offers"),
+		Vehicles: regs.Vehicles, Counters: regs.Counters, Keys: regs.Keys,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -108,7 +113,7 @@ func newEnv(t *testing.T) *env {
 	w := worker.New(worker.Config{
 		Outbox:   ob,
 		Store:    db,
-		Decoder:  decode.New(casStore),
+		Decoder:  decode.New(casStore, testbundle.Keys()),
 		Log:      testLogger(),
 		CAS:      casStore,
 		Registry: reg,
@@ -310,7 +315,7 @@ func TestDecodeIsReproducible(t *testing.T) {
 
 	e.syncBundle(t, b)
 
-	decoder := decode.New(e.cas)
+	decoder := decode.New(e.cas, testbundle.Keys())
 	manifestDigest := sha256.Sum256(b.ManifestBytes)
 
 	in := decode.Input{ContentRoot: b.Manifest.ContentRoot, ManifestDigest: manifestDigest}

@@ -6,22 +6,6 @@ import (
 	"testing"
 )
 
-// testHeader returns a deterministic segment header so vectors are
-// reproducible byte-for-byte across runs and implementations.
-func testHeader(segmentIndex uint32) SegmentHeader {
-	var dev, boot [16]byte
-	for i := range dev {
-		dev[i] = byte(0x10 + i)
-		boot[i] = byte(0xA0 + i)
-	}
-	return SegmentHeader{
-		DeviceID:          dev,
-		BootID:            boot,
-		SegmentIndex:      segmentIndex,
-		OpenedMonotonicUS: 1_000_000,
-	}
-}
-
 // gnssPayload builds a 32-byte GNSS sample with a 3D fix.
 func gnssPayload(latE7, lonE7 int32) []byte {
 	p := make([]byte, 32)
@@ -53,7 +37,7 @@ func gnssGapPayload(durationMS uint32, expected uint16, cause uint8) []byte {
 // buildValidSegment writes n GNSS samples at 1 Hz.
 func buildValidSegment(t *testing.T, segmentIndex uint32, state ScanState, n int) *SegmentWriter {
 	t.Helper()
-	w := NewSegmentWriter(testHeader(segmentIndex), state)
+	w := newTestWriter(t, testHeader(segmentIndex), state)
 	for i := 0; i < n; i++ {
 		payload := gnssPayload(int32(34_000_000+i*100), int32(-118_500_000+i*100))
 		if err := w.Append(RecordGNSSSample, 1, 0, uint32(i*1000), payload); err != nil {
@@ -65,7 +49,7 @@ func buildValidSegment(t *testing.T, segmentIndex uint32, state ScanState, n int
 
 func mustScan(t *testing.T, b []byte, state ScanState) *ScanResult {
 	t.Helper()
-	res, err := ScanSegment(b, state)
+	res, err := ScanSegment(b, state, testKeys())
 	if err != nil {
 		t.Fatalf("ScanSegment: unexpected error %v", err)
 	}
@@ -75,7 +59,7 @@ func mustScan(t *testing.T, b []byte, state ScanState) *ScanResult {
 // ─── vector: valid-minimal ──────────────────────────────────────────────────
 
 func TestValidMinimal(t *testing.T) {
-	w := NewSegmentWriter(testHeader(0), ScanState{})
+	w := newTestWriter(t, testHeader(0), ScanState{})
 
 	types := []RecordType{
 		RecordGNSSSample, RecordIMUSummary, RecordIMURawWindow, RecordOBDSnapshot,
@@ -124,7 +108,7 @@ func TestValidMultiSegment(t *testing.T) {
 	w1 := buildValidSegment(t, 1, w0.NextState(), 4)
 	seg1 := append([]byte(nil), w1.Bytes()...)
 
-	results, err := ScanBundle([][]byte{seg0, seg1})
+	results, err := ScanBundle([][]byte{seg0, seg1}, testKeys())
 	if err != nil {
 		t.Fatalf("ScanBundle: %v", err)
 	}
@@ -164,7 +148,7 @@ func TestValidMultiSegment(t *testing.T) {
 
 	// Scanning segment 1 without segment 0's state must be detected, not
 	// silently accepted.
-	res, err := ScanSegment(seg1, ScanState{})
+	res, err := ScanSegment(seg1, ScanState{}, testKeys())
 	if err != nil {
 		t.Fatalf("ScanSegment: %v", err)
 	}
@@ -288,7 +272,7 @@ func TestChainBreakSpliced(t *testing.T) {
 // a skipped seq but a correct prev_crc32, so only the sequence check can catch
 // it.
 func TestSeqGap(t *testing.T) {
-	w := NewSegmentWriter(testHeader(0), ScanState{})
+	w := newTestWriter(t, testHeader(0), ScanState{})
 	if err := w.Append(RecordGNSSSample, 1, 0, 0, gnssPayload(34_000_000, -118_500_000)); err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +287,7 @@ func TestSeqGap(t *testing.T) {
 		PrevCRC32:     w.NextState().ExpectedPrev,
 		Payload:       gnssPayload(34_000_100, -118_499_900),
 	}
-	b, _, err := AppendFrame(b, &f)
+	b, _, err := AppendFrame(b, &f, w.cipher)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -330,7 +314,7 @@ func TestBadHeaderCRC(t *testing.T) {
 
 	b[24] ^= 0xFF // corrupt boot_id, which the header CRC covers
 
-	if _, err := ScanSegment(b, ScanState{}); !errors.Is(err, ErrBadHeaderCRC) {
+	if _, err := ScanSegment(b, ScanState{}, testKeys()); !errors.Is(err, ErrBadHeaderCRC) {
 		t.Fatalf("error = %v, want ErrBadHeaderCRC", err)
 	}
 }
@@ -340,7 +324,7 @@ func TestBadMagic(t *testing.T) {
 	b := append([]byte(nil), w.Bytes()...)
 	b[0] = 'X'
 
-	if _, err := ScanSegment(b, ScanState{}); !errors.Is(err, ErrBadMagic) {
+	if _, err := ScanSegment(b, ScanState{}, testKeys()); !errors.Is(err, ErrBadMagic) {
 		t.Fatalf("error = %v, want ErrBadMagic", err)
 	}
 }
@@ -351,7 +335,7 @@ func TestBadMagic(t *testing.T) {
 // of the segment still parses. This is how a newer device stays partially
 // readable by an older decoder.
 func TestUnknownRecordType(t *testing.T) {
-	w := NewSegmentWriter(testHeader(0), ScanState{})
+	w := newTestWriter(t, testHeader(0), ScanState{})
 	if err := w.Append(RecordGNSSSample, 1, 0, 0, gnssPayload(34_000_000, -118_500_000)); err != nil {
 		t.Fatal(err)
 	}
@@ -383,7 +367,7 @@ func TestUnknownRecordType(t *testing.T) {
 // A UTC estimate that jumps backwards must not disturb ordering, because
 // ordering truth is (boot_id, seq) and UTC is only an annotation.
 func TestClockJump(t *testing.T) {
-	w := NewSegmentWriter(testHeader(0), ScanState{})
+	w := newTestWriter(t, testHeader(0), ScanState{})
 
 	var utcAhead int32 = 5_000
 	forward := gnssPayload(34_000_000, -118_500_000)
@@ -425,7 +409,7 @@ func TestClockJump(t *testing.T) {
 // A gap is recorded explicitly and preserved, so a decoder can render a
 // discontinuity rather than joining the route across missing data.
 func TestGNSSGapPreserved(t *testing.T) {
-	w := NewSegmentWriter(testHeader(0), ScanState{})
+	w := newTestWriter(t, testHeader(0), ScanState{})
 	if err := w.Append(RecordGNSSSample, 1, 0, 0, gnssPayload(34_000_000, -118_500_000)); err != nil {
 		t.Fatal(err)
 	}
@@ -460,7 +444,7 @@ func TestGNSSGapPreserved(t *testing.T) {
 // ─── vector: empty-segment ──────────────────────────────────────────────────
 
 func TestEmptySegment(t *testing.T) {
-	w := NewSegmentWriter(testHeader(0), ScanState{})
+	w := newTestWriter(t, testHeader(0), ScanState{})
 
 	res := mustScan(t, w.Bytes(), ScanState{})
 
@@ -478,7 +462,7 @@ func TestEmptySegment(t *testing.T) {
 // ─── vector: max-frame ──────────────────────────────────────────────────────
 
 func TestMaxFrame(t *testing.T) {
-	w := NewSegmentWriter(testHeader(0), ScanState{})
+	w := newTestWriter(t, testHeader(0), ScanState{})
 
 	if err := w.Append(RecordIMURawWindow, 1, 0, 0, make([]byte, MaxPayloadSize)); err != nil {
 		t.Fatalf("maximum-size payload rejected: %v", err)
@@ -491,7 +475,7 @@ func TestMaxFrame(t *testing.T) {
 		t.Errorf("frame length = %d, want %d", got, MaxFrameLen)
 	}
 
-	w2 := NewSegmentWriter(testHeader(0), ScanState{})
+	w2 := newTestWriter(t, testHeader(0), ScanState{})
 	if err := w2.Append(RecordIMURawWindow, 1, 0, 0, make([]byte, MaxPayloadSize+1)); err == nil {
 		t.Error("oversized payload accepted, want rejection")
 	}
@@ -536,7 +520,7 @@ func TestTruncationAtEveryOffsetIsSafe(t *testing.T) {
 	full := w.Bytes()
 
 	for cut := SegmentHeaderSize; cut <= len(full); cut++ {
-		res, err := ScanSegment(full[:cut], ScanState{})
+		res, err := ScanSegment(full[:cut], ScanState{}, testKeys())
 		if err != nil {
 			t.Fatalf("truncated to %d bytes: unexpected error %v", cut, err)
 		}

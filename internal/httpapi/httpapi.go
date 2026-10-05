@@ -363,6 +363,17 @@ func (s *Server) failIntake(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, devices.ErrQuotaExceeded):
 		s.fail(w, r, http.StatusInsufficientStorage, "device storage quota exceeded", err)
 
+	// v3 binding. A refused assignment or a missing storage key is the device's
+	// enrolment being wrong, fixable by an administrator, so 403 like the other
+	// enrolment failures. A quarantined bundle is permanent — the same bytes
+	// will be refused the same way — so 422 tells the device to stop retrying.
+	case errors.Is(err, intake.ErrAssignmentRefused):
+		s.fail(w, r, http.StatusForbidden, "vehicle assignment refused", err)
+	case errors.Is(err, intake.ErrNoStorageKey):
+		s.fail(w, r, http.StatusForbidden, "no escrowed storage key for this device", err)
+	case errors.Is(err, intake.ErrQuarantined):
+		s.fail(w, r, http.StatusUnprocessableEntity, "bundle quarantined", err)
+
 	case errors.Is(err, format.ErrBadSignature):
 		s.fail(w, r, http.StatusUnauthorized, "manifest signature verification failed", err)
 	case errors.Is(err, format.ErrNonCanonical):

@@ -64,7 +64,7 @@ func buildTestServer(t *testing.T) *server {
 	}
 	t.Cleanup(func() { snap.Close() })
 
-	db, err := tsdb.Build(context.Background(), snap, notes, tsdb.Options{MemoryLimit: "512MB", Threads: 2})
+	db, err := tsdb.Build(context.Background(), snap, notes, tsdb.Options{MemoryLimit: "512MB", Threads: 2, Keys: testbundle.Keys()})
 	if err != nil {
 		t.Fatal(err)
 	}
