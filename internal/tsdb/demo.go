@@ -75,7 +75,7 @@ func BuildSynthetic(ctx context.Context, fill func(Appenders) error) (*DB, error
 	}
 
 	for _, t := range sampleTables {
-		q := fmt.Sprintf("CREATE OR REPLACE TABLE %[1]s AS SELECT * FROM %[1]s ORDER BY boot_id, mono_ms, seq", t)
+		q := fmt.Sprintf("CREATE OR REPLACE TABLE %[1]s AS SELECT * FROM %[1]s ORDER BY vehicle_id, boot_id, mono_ms, seq", t)
 		if _, err := sdb.ExecContext(ctx, q); err != nil {
 			return fail(fmt.Errorf("sort %s: %w", t, err))
 		}

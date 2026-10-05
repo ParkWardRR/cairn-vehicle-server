@@ -41,6 +41,7 @@ func (l *stringList) Set(v string) error { *l = append(*l, v); return nil }
 type appFlags struct {
 	addr            string
 	serveAddr       string
+	localAddr       string
 	certFile        string
 	keyFile         string
 	lan             stringList
@@ -59,6 +60,9 @@ func registerAppFlags(f *appFlags) {
 	flag.StringVar(&f.serveAddr, "app-serve-addr", "",
 		"loopback-only plain-HTTP listener for `tailscale serve` to front, e.g. 127.0.0.1:8445. "+
 			"Served by the SAME app API instance as -app-addr, so LAN and tailnet share one log, one cursor and one set of clients")
+	flag.StringVar(&f.localAddr, "app-local-addr", "",
+		"loopback-only listener for same-host processes (the web UI asks it what to call each vehicle). "+
+			"Never point tailscale serve or a proxy at it")
 	flag.StringVar(&f.certFile, "app-tls-cert", "", "app listener certificate (default: -tls-cert)")
 	flag.StringVar(&f.keyFile, "app-tls-key", "", "app listener key (default: -tls-key)")
 	flag.Var(&f.lan, "lan-cidr", "CIDR counted as the LAN for the audit log (repeatable; default: private ranges)")
@@ -82,6 +86,10 @@ func startApp(f appFlags, cfg runConfig, deviceReg *devices.Registry, vehicleReg
 	if f.serveAddr != "" && !syncapi.IsLoopbackAddr(f.serveAddr) {
 		return nil, errors.New("-app-serve-addr must be a loopback address: it is plain HTTP, " +
 			"and only tailscale serve on this host should be able to reach it")
+	}
+
+	if f.localAddr != "" && !syncapi.IsLoopbackAddr(f.localAddr) {
+		return nil, errors.New("-app-local-addr must be a loopback address: it has no authentication of its own")
 	}
 
 	paths := syncapi.DataPaths(cfg.dataDir)
@@ -194,6 +202,12 @@ func startApp(f appFlags, cfg runConfig, deviceReg *devices.Registry, vehicleReg
 	}
 
 	var servers []*http.Server
+	if f.localAddr != "" {
+		srv := &http.Server{Addr: f.localAddr, Handler: syncapi.LocalHandler(vehicleReg),
+			ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second}
+		serve(srv, false)
+		servers = append(servers, srv)
+	}
 	if f.addr != "" {
 		srv := newServer(f.addr, tlsCfg)
 		serve(srv, useTLS)
@@ -205,12 +219,22 @@ func startApp(f appFlags, cfg runConfig, deviceReg *devices.Registry, vehicleReg
 		servers = append(servers, srv)
 	}
 
+	// Trips reach the app as trip_summary entities. They are read from the
+	// analytical store (the one definition of a trip) by a publisher living in
+	// this process, because the sync log is single-writer and the decode worker
+	// is a different process.
+	pubCtx, stopPublisher := context.WithCancel(context.Background())
+	if f.snapshotURL != "" {
+		go (&syncapi.TripPublisher{URL: f.snapshotURL, Store: store, Log: log}).Run(pubCtx)
+	}
+
 	log.Info("app API listening",
 		"lan_addr", f.addr, "lan_tls", useTLS, "serve_addr", f.serveAddr,
 		"trust_tailscale_serve", f.trustServe,
 		"require_tailnet_identity", f.requireIdentity, "instance", instance)
 
 	return func(ctx context.Context) error {
+		stopPublisher()
 		var first error
 		for _, srv := range servers {
 			if err := srv.Shutdown(ctx); err != nil && first == nil {

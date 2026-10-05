@@ -789,7 +789,7 @@ func TestOversizedBodyRefused(t *testing.T) {
 	}
 }
 
-func TestSnapshotIsAuthenticatedProxiedAndNeedsFullScope(t *testing.T) {
+func TestSnapshotIsAuthenticatedProxiedAndScoped(t *testing.T) {
 	var gotPath, gotQuery string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath, gotQuery = r.URL.Path, r.URL.RawQuery
@@ -811,16 +811,43 @@ func TestSnapshotIsAuthenticatedProxiedAndNeedsFullScope(t *testing.T) {
 		t.Fatal("an unauthenticated request reached the analytical store")
 	}
 
-	// A client scoped to one car cannot take a table dump of every car.
+	// A scoped client must name a vehicle...
 	if r := narrow.do("GET", "/v1/snapshot", nil); r.StatusCode != http.StatusForbidden {
-		t.Fatalf("narrow-scope snapshot: %d, want 403", r.StatusCode)
+		t.Fatalf("scoped client with no vehicle: %d, want 403", r.StatusCode)
+	}
+	if gotPath != "" {
+		t.Fatal("a scoped client's un-scoped request reached the analytical store")
+	}
+	// ...and it must be one of theirs.
+	if r := narrow.do("GET", "/v1/snapshot?vehicle="+e.b58.ID, nil); r.StatusCode != http.StatusForbidden {
+		t.Fatalf("scoped client asking for another car: %d, want 403", r.StatusCode)
+	}
+	if gotPath != "" {
+		t.Fatal("an out-of-scope vehicle request reached the analytical store")
+	}
+	// Its own vehicle is served, filtered at the source.
+	r := narrow.do("GET", "/v1/snapshot?vehicle="+e.n20.ID+"&format=tar&evil=1", nil)
+	if r.StatusCode != 200 || readBody(r) != "SNAPSHOT-BYTES" {
+		t.Fatalf("scoped client, own vehicle: %d", r.StatusCode)
+	}
+	if gotPath != "/snapshot" || gotQuery != "format=tar&vehicle="+e.n20.ID {
+		t.Fatalf("upstream saw %s?%s; only format and vehicle may be forwarded", gotPath, gotQuery)
 	}
 
-	r := full.do("GET", "/v1/snapshot?format=tar&evil=1", nil)
-	if r.StatusCode != 200 || readBody(r) != "SNAPSHOT-BYTES" {
-		t.Fatalf("full-scope snapshot: %d", r.StatusCode)
+	// A malformed vehicle id never reaches the upstream.
+	gotPath = ""
+	if r := full.do("GET", "/v1/snapshot?vehicle=%27%20OR%201%3D1%20--", nil); r.StatusCode != http.StatusBadRequest {
+		t.Fatalf("malformed vehicle id: %d, want 400", r.StatusCode)
 	}
-	if gotPath != "/snapshot" || gotQuery != "format=tar" {
-		t.Fatalf("upstream saw %s?%s; only the format selector may be forwarded", gotPath, gotQuery)
+	if gotPath != "" {
+		t.Fatal("a malformed vehicle id was forwarded")
+	}
+
+	// A full-scope client may omit it (whole archive) or narrow it.
+	if r := full.do("GET", "/v1/snapshot", nil); r.StatusCode != 200 || gotQuery != "" {
+		t.Fatalf("full scope, no vehicle: %d, upstream query %q", r.StatusCode, gotQuery)
+	}
+	if r := full.do("GET", "/v1/snapshot?vehicle="+e.b58.ID, nil); r.StatusCode != 200 || gotQuery != "vehicle="+e.b58.ID {
+		t.Fatalf("full scope, one vehicle: %d, upstream query %q", r.StatusCode, gotQuery)
 	}
 }

@@ -50,9 +50,9 @@ type Options struct {
 
 // DB is a built, locked, queryable store.
 type DB struct {
-	db              *sql.DB
-	Report          Report
-	snapshotFormats *SnapshotFormats
+	db        *sql.DB
+	Report    Report
+	snapshots snapshotSet
 }
 
 // BundleReport is the reproducibility record for one loaded bundle.
@@ -140,7 +140,7 @@ func Build(ctx context.Context, snap *Snapshot, notes []string, opts Options) (*
 	}
 
 	for _, t := range sampleTables {
-		q := fmt.Sprintf("CREATE OR REPLACE TABLE %[1]s AS SELECT * FROM %[1]s ORDER BY boot_id, mono_ms, seq", t)
+		q := fmt.Sprintf("CREATE OR REPLACE TABLE %[1]s AS SELECT * FROM %[1]s ORDER BY vehicle_id, boot_id, mono_ms, seq", t)
 		if _, err := sdb.ExecContext(ctx, q); err != nil {
 			return fail(fmt.Errorf("sort %s: %w", t, err))
 		}
@@ -150,9 +150,9 @@ func Build(ctx context.Context, snap *Snapshot, notes []string, opts Options) (*
 	}
 
 	// Export snapshot before lockdown — COPY TO needs external access enabled.
-	var sf *SnapshotFormats
+	var snaps snapshotSet
 	if len(report.Bundles) > 0 {
-		sf, err = exportSnapshot(ctx, sdb, &report)
+		snaps, err = exportSnapshots(ctx, sdb, &report)
 		if err != nil {
 			return fail(fmt.Errorf("snapshot: %w", err))
 		}
@@ -169,10 +169,10 @@ func Build(ctx context.Context, snap *Snapshot, notes []string, opts Options) (*
 	}
 
 	report.BuildMS = time.Since(started).Milliseconds()
-	if sf != nil {
+	for _, sf := range snaps {
 		sf.Meta.BuildMS = report.BuildMS
 	}
-	return &DB{db: sdb, Report: report, snapshotFormats: sf}, nil
+	return &DB{db: sdb, Report: report, snapshots: snaps}, nil
 }
 
 // Close releases the database.
@@ -268,6 +268,10 @@ func opt[T any](p *T) driver.Value {
 func appendResult(apps map[string]*duckdb.Appender, ref Ref, res *decode.Result, digest string, reproduced bool) (expected, error) {
 	root := hex.EncodeToString(res.ContentRoot[:])
 	boot := hex.EncodeToString(res.BootID[:])
+	// Each row is written with its own vehicle rather than the bundle's, so the
+	// store holds exactly what the decoder said and a decoder slip shows up as a
+	// reconcile problem rather than being papered over here.
+	veh := func(v [16]byte) string { return hex.EncodeToString(v[:]) }
 
 	c := Counts{
 		Position:   uint32(len(res.Positions)),
@@ -286,7 +290,7 @@ func appendResult(apps map[string]*duckdb.Appender, ref Ref, res *decode.Result,
 		return nil
 	}
 
-	if err := row("bundles", root, hex.EncodeToString(res.BundleID[:]), hex.EncodeToString(res.DeviceID[:]),
+	if err := row("bundles", root, veh(res.VehicleID), hex.EncodeToString(res.BundleID[:]), hex.EncodeToString(res.DeviceID[:]),
 		boot, ref.Origin, int32(decode.Version), digest, reproduced, int32(res.DurationMS),
 		c.Position, c.IMU, c.OBD, c.Boost, c.Status, c.Transition, c.Gap,
 		int32(res.UnknownRecords), strings.Join(res.Warnings, "; ")); err != nil {
@@ -295,7 +299,7 @@ func appendResult(apps map[string]*duckdb.Appender, ref Ref, res *decode.Result,
 
 	for i := range res.Positions {
 		p := &res.Positions[i]
-		if err := row("position", root, boot, p.MonotonicMS, p.Seq, p.ObservedAt,
+		if err := row("position", veh(p.VehicleID), root, boot, p.MonotonicMS, p.Seq, p.ObservedAt,
 			p.Latitude, p.Longitude, opt(p.AltitudeM), opt(p.SpeedMPS), opt(p.HeadingDeg),
 			p.FixType, opt(p.SatsUsed), opt(p.SatsVisible),
 			opt(p.HDOP), opt(p.HAccM), opt(p.VAccM), opt(p.UTCAccMS),
@@ -305,7 +309,7 @@ func appendResult(apps map[string]*duckdb.Appender, ref Ref, res *decode.Result,
 	}
 	for i := range res.IMU {
 		m := &res.IMU[i]
-		if err := row("imu", root, boot, m.MonotonicMS, m.Seq, m.ObservedAt,
+		if err := row("imu", veh(m.VehicleID), root, boot, m.MonotonicMS, m.Seq, m.ObservedAt,
 			m.WindowMS, m.AccelRMSmg, m.AccelPeakXmg, m.AccelPeakYmg, m.AccelPeakZmg,
 			m.GyroPeakDPS, m.Variance, m.SampleCount, m.EventFlags, m.FrameFlags); err != nil {
 			return expected{}, err
@@ -313,7 +317,7 @@ func appendResult(apps map[string]*duckdb.Appender, ref Ref, res *decode.Result,
 	}
 	for i := range res.OBD {
 		o := &res.OBD[i]
-		if err := row("obd", root, boot, o.MonotonicMS, o.Seq, o.ObservedAt,
+		if err := row("obd", veh(o.VehicleID), root, boot, o.MonotonicMS, o.Seq, o.ObservedAt,
 			opt(o.SpeedKPH), opt(o.RPM), opt(o.ThrottlePct), opt(o.EngineLoadPct),
 			opt(o.CoolantTempC), opt(o.IntakeTempC),
 			opt(o.FuelPressureKPa), opt(o.TimingAdvanceDeg),
@@ -323,7 +327,7 @@ func appendResult(apps map[string]*duckdb.Appender, ref Ref, res *decode.Result,
 	}
 	for i := range res.Boost {
 		b := &res.Boost[i]
-		if err := row("boost", root, boot, b.MonotonicMS, b.Seq, b.ObservedAt,
+		if err := row("boost", veh(b.VehicleID), root, boot, b.MonotonicMS, b.Seq, b.ObservedAt,
 			opt(b.MAPkPa), opt(b.BaroKPa), opt(b.MAFcgps), opt(b.LambdaE4), opt(b.AbsLoadRaw),
 			opt(b.AmbientTempC), opt(b.FuelTrimShortPct), opt(b.FuelTrimLongPct),
 			opt(b.FuelLevelPct),
@@ -334,7 +338,7 @@ func appendResult(apps map[string]*duckdb.Appender, ref Ref, res *decode.Result,
 	}
 	for i := range res.Status {
 		s := &res.Status[i]
-		if err := row("status", root, boot, s.MonotonicMS, s.Seq, s.ObservedAt,
+		if err := row("status", veh(s.VehicleID), root, boot, s.MonotonicMS, s.Seq, s.ObservedAt,
 			opt(s.BatteryMV), opt(s.SDWriteErrors), opt(s.SDFreeMiB),
 			opt(s.DeviceTempC), opt(s.RSSIdBm), opt(s.ExtSensor1), opt(s.ExtSensor2),
 			s.HealthState, s.RebootCount); err != nil {
@@ -343,7 +347,7 @@ func appendResult(apps map[string]*duckdb.Appender, ref Ref, res *decode.Result,
 	}
 	for i := range res.Transitions {
 		t := &res.Transitions[i]
-		if err := row("transition", root, boot, t.MonotonicMS, t.Seq, t.ObservedAt,
+		if err := row("transition", veh(t.VehicleID), root, boot, t.MonotonicMS, t.Seq, t.ObservedAt,
 			t.Region, t.FromState, t.ToState, t.TriggerEvent, t.ReasonCode, t.PolicyVersion,
 			t.StartScore, t.StopScore, t.WakeCause); err != nil {
 			return expected{}, err
@@ -351,7 +355,7 @@ func appendResult(apps map[string]*duckdb.Appender, ref Ref, res *decode.Result,
 	}
 	for i := range res.Gaps {
 		g := &res.Gaps[i]
-		if err := row("gap", root, boot, g.Seq, g.StartedAt, g.DurationMS, g.ExpectedSamples, g.Cause); err != nil {
+		if err := row("gap", veh(g.VehicleID), root, boot, g.Seq, g.StartedAt, g.DurationMS, g.ExpectedSamples, g.Cause); err != nil {
 			return expected{}, err
 		}
 	}
@@ -409,6 +413,21 @@ func reconcile(ctx context.Context, sdb *sql.DB, loaded []expected, report *Repo
 			*fields(c, t) = uint32(n)
 		}
 		rows.Close()
+	}
+
+	// A row filed under a different car from its own bundle would be counted
+	// above and still be wrong, so the vehicle is reconciled separately.
+	for _, t := range []string{"position", "imu", "obd", "boost", "status", "transition", "gap"} {
+		var n int64
+		q := fmt.Sprintf(`SELECT count(*) FROM %s t JOIN bundles b USING (content_root)
+			WHERE t.vehicle_id IS DISTINCT FROM b.vehicle_id`, t)
+		if err := sdb.QueryRowContext(ctx, q).Scan(&n); err != nil {
+			return fmt.Errorf("reconcile %s vehicle: %w", t, err)
+		}
+		if n > 0 {
+			report.Problems = append(report.Problems, fmt.Sprintf(
+				"%s: %d row(s) carry a vehicle_id different from their bundle's", t, n))
+		}
 	}
 
 	roots := make([]string, 0, len(want))

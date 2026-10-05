@@ -355,7 +355,7 @@ func run(cfg runConfig) error {
 	// port. It has its own limiter: a phone retrying must never spend a
 	// dongle's allowance.
 	var stopApp func(context.Context) error
-	if cfg.app.addr != "" || cfg.app.serveAddr != "" {
+	if cfg.app.addr != "" || cfg.app.serveAddr != "" || cfg.app.localAddr != "" {
 		stopApp, err = startApp(cfg.app, cfg, registry, vehicleReg, httpapi.NewLimiter(240, 4), cfg.log)
 		if err != nil {
 			return fmt.Errorf("start app API: %w", err)

@@ -86,6 +86,7 @@ func (r *Result) deriveTrip(recoveryState uint8) {
 
 	trip := &Trip{
 		TripID:        tripID(r.ContentRoot),
+		VehicleID:     r.VehicleID,
 		RecoveryState: recoveryState,
 		SampleCount:   len(r.Positions),
 		GapCount:      len(r.Gaps),
@@ -379,6 +380,7 @@ func (r *Result) addEvent(kind string, at time.Time, seq uint32, detail map[stri
 		detail = map[string]any{}
 	}
 	r.Events = append(r.Events, Event{
+		VehicleID:  r.VehicleID,
 		EventID:    eventID(r.ContentRoot, kind, seq),
 		Kind:       kind,
 		OccurredAt: at,

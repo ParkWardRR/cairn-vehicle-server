@@ -15,6 +15,16 @@
 //	cairn-tsdb -sd /Volumes/CAIRN/cairn -query 'SELECT max(boost_psi) FROM boost'
 //
 // v1 trips are not read. v1 is dead: see docs/trip-file-format.md.
+//
+// The read-only query contract is per vehicle. Every table and every v_* view
+// carries vehicle_id (32 lowercase hex, the bundle manifest's binding) and is
+// computed per vehicle, so a caller selects one car with
+//
+//	SELECT … FROM v_trim_map WHERE vehicle_id = '<hex>'
+//
+// and gets exactly that car's bins. A caller writing its own join must join on
+// vehicle_id as well as boot_id; v_vehicles lists the cars the store holds.
+// GET /snapshot?vehicle=<hex> narrows every exported table the same way.
 package main
 
 import (
@@ -301,14 +311,28 @@ func (s *server) rebuild(ctx context.Context) (*tsdb.DB, error) {
 	return next, nil
 }
 
+// snapshotHandler serves the Parquet archive. ?vehicle=<32 hex> narrows every
+// table to one car; without it the archive holds every vehicle. A vehicle the
+// store has no rows for is a 404 rather than an empty archive, so a caller can
+// tell "no data for that car" from "that car has no trips in this table".
 func (s *server) snapshotHandler(w http.ResponseWriter, r *http.Request) {
 	format := r.URL.Query().Get("format")
 	if format == "" {
 		format = "zstd"
 	}
+	vehicle := strings.ToLower(r.URL.Query().Get("vehicle"))
+	if vehicle != "" && !tsdb.VehicleIDPattern.MatchString(vehicle) {
+		http.Error(w, "vehicle must be 32 hex characters", http.StatusBadRequest)
+		return
+	}
 
-	data, contentType, digest, meta := s.cur.Load().SnapshotFormat(format)
+	db := s.cur.Load()
+	data, contentType, digest, meta := db.SnapshotFormat(format, vehicle)
 	if data == nil {
+		if vehicle != "" && len(db.Report.Bundles) > 0 {
+			http.Error(w, "no data for that vehicle", http.StatusNotFound)
+			return
+		}
 		http.Error(w, "no snapshot available", http.StatusServiceUnavailable)
 		return
 	}

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"time"
 
 	"github.com/klauspost/compress/zstd"
@@ -20,15 +21,26 @@ import (
 // SnapshotSchemaVersion is bumped when the set of exported tables or their
 // columns change. Clients check it before loading and refuse an unrecognised
 // version rather than crashing on a missing column.
-const SnapshotSchemaVersion = 1
+//
+// Version 2 adds vehicle_id to every table (and to drive_summary), and the
+// manifest's vehicle/vehicles fields. A version-1 reader would load the tables
+// and blend every car's trims into one map, so it must refuse rather than
+// guess.
+const SnapshotSchemaVersion = 2
 
 // SnapshotMeta is the manifest embedded in every snapshot archive.
 type SnapshotMeta struct {
-	SchemaVersion  int            `json:"schema_version"`
-	BuiltAt        time.Time      `json:"built_at"`
-	BuildMS        int64          `json:"build_ms"`
-	DecoderVersion int            `json:"decoder_version"`
-	BundleCount    int            `json:"bundle_count"`
+	SchemaVersion  int       `json:"schema_version"`
+	BuiltAt        time.Time `json:"built_at"`
+	BuildMS        int64     `json:"build_ms"`
+	DecoderVersion int       `json:"decoder_version"`
+	BundleCount    int       `json:"bundle_count"`
+
+	// Vehicle is the filter this archive was cut with: one vehicle id, or empty
+	// for every vehicle. Vehicles lists the vehicles whose rows it holds.
+	Vehicle  string   `json:"vehicle,omitempty"`
+	Vehicles []string `json:"vehicles"`
+
 	RowCounts      map[string]int `json:"row_counts"`
 	Tables         []string       `json:"tables"`
 	CompressedSize int            `json:"compressed_size_bytes"`
@@ -51,18 +63,34 @@ type SnapshotFormats struct {
 	Digests map[string]string // format key → "sha256:..."
 }
 
-// Snapshot returns the default (zstd) format for backward compatibility.
+// snapshotSet is every archive one build produced: the unfiltered one under the
+// empty key and one per vehicle under its id.
+//
+// They are all cut at build time because COPY TO needs external access, which
+// is switched off for good before the store serves a single query. A handful of
+// cars makes that a handful of small archives, and it means a filtered
+// snapshot is the same kind of immutable, digest-addressed object as the full
+// one rather than something assembled per request.
+type snapshotSet map[string]*SnapshotFormats
+
+// VehicleIDPattern is the shape of a vehicle id everywhere in the store: the
+// 16-byte identifier as 32 lowercase hex characters.
+var VehicleIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+// Snapshot returns the unfiltered snapshot in the default (zstd) format.
 func (d *DB) Snapshot() ([]byte, *SnapshotMeta) {
-	if d.snapshotFormats == nil {
+	sf := d.snapshots[""]
+	if sf == nil {
 		return nil, nil
 	}
-	return d.snapshotFormats.Zstd, d.snapshotFormats.Meta
+	return sf.Zstd, sf.Meta
 }
 
-// SnapshotFormat returns the snapshot in the requested format.
-// Returns nil data when no snapshot exists or the format is unknown.
-func (d *DB) SnapshotFormat(format string) (data []byte, contentType string, digest string, meta *SnapshotMeta) {
-	sf := d.snapshotFormats
+// SnapshotFormat returns the snapshot in the requested format, filtered to one
+// vehicle when vehicle is non-empty. It returns nil data when no snapshot
+// exists, which for a vehicle means the store holds no rows for it.
+func (d *DB) SnapshotFormat(format, vehicle string) (data []byte, contentType string, digest string, meta *SnapshotMeta) {
+	sf := d.snapshots[vehicle]
 	if sf == nil {
 		return nil, "", "", nil
 	}
@@ -76,14 +104,72 @@ func (d *DB) SnapshotFormat(format string) (data []byte, contentType string, dig
 	}
 }
 
+// SnapshotVehicles returns the vehicles a filtered snapshot exists for.
+func (d *DB) SnapshotVehicles() []string {
+	sf := d.snapshots[""]
+	if sf == nil {
+		return nil
+	}
+	return append([]string(nil), sf.Meta.Vehicles...)
+}
+
 // SnapshotFormatNames returns the supported format keys.
 func SnapshotFormatNames() []string { return []string{"zstd", "gzip", "tar"} }
 
-// exportSnapshot writes every table to Parquet in a temp directory,
-// materialises v_drive_summary, builds the archive in multiple compression
-// formats and returns them with shared metadata. Called during Build() before
-// the DuckDB lockdown.
-func exportSnapshot(ctx context.Context, sdb *sql.DB, report *Report) (*SnapshotFormats, error) {
+// exportSnapshots materialises v_drive_summary and cuts the unfiltered archive
+// plus one per vehicle. Called during Build() before the DuckDB lockdown.
+func exportSnapshots(ctx context.Context, sdb *sql.DB, report *Report) (snapshotSet, error) {
+	// Materialise v_drive_summary as a real table for export, then drop it
+	// afterwards so the view definition can be created normally.
+	if _, err := sdb.ExecContext(ctx, "CREATE TABLE drive_summary AS SELECT * FROM v_drive_summary"); err != nil {
+		return nil, fmt.Errorf("materialise drive_summary: %w", err)
+	}
+	defer sdb.ExecContext(ctx, "DROP TABLE IF EXISTS drive_summary")
+
+	rows, err := sdb.QueryContext(ctx, "SELECT DISTINCT vehicle_id FROM bundles ORDER BY vehicle_id")
+	if err != nil {
+		return nil, fmt.Errorf("list vehicles: %w", err)
+	}
+	var vehicles []string
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		// The id is spliced into SQL below, so it is checked rather than
+		// trusted, even though this process wrote it.
+		if !VehicleIDPattern.MatchString(v) {
+			rows.Close()
+			return nil, fmt.Errorf("vehicle id %q is not 32 lowercase hex", v)
+		}
+		vehicles = append(vehicles, v)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	set := snapshotSet{}
+	all, err := exportSnapshot(ctx, sdb, report, "", vehicles)
+	if err != nil {
+		return nil, err
+	}
+	set[""] = all
+	for _, v := range vehicles {
+		sf, err := exportSnapshot(ctx, sdb, report, v, []string{v})
+		if err != nil {
+			return nil, fmt.Errorf("vehicle %s: %w", v, err)
+		}
+		set[v] = sf
+	}
+	return set, nil
+}
+
+// exportSnapshot writes every table to Parquet in a temp directory — only
+// vehicle's rows when vehicle is set — builds the archive in multiple
+// compression formats and returns them with shared metadata.
+func exportSnapshot(ctx context.Context, sdb *sql.DB, report *Report, vehicle string, vehicles []string) (*SnapshotFormats, error) {
 	dir, err := os.MkdirTemp("", "cairn-snapshot-")
 	if err != nil {
 		return nil, fmt.Errorf("snapshot tmpdir: %w", err)
@@ -94,35 +180,38 @@ func exportSnapshot(ctx context.Context, sdb *sql.DB, report *Report) (*Snapshot
 	tables = append(tables, snapshotTables...)
 	tables = append(tables, "drive_summary")
 
-	// Materialise v_drive_summary as a real table for export, then drop it
-	// afterwards so the view definition can be created normally.
-	if _, err := sdb.ExecContext(ctx, "CREATE TABLE drive_summary AS SELECT * FROM v_drive_summary"); err != nil {
-		return nil, fmt.Errorf("materialise drive_summary: %w", err)
+	where := ""
+	if vehicle != "" {
+		where = fmt.Sprintf(" WHERE vehicle_id = '%s'", vehicle)
 	}
-	defer sdb.ExecContext(ctx, "DROP TABLE IF EXISTS drive_summary")
 
 	rowCounts := make(map[string]int, len(tables))
 	for _, t := range tables {
 		path := filepath.Join(dir, t+".parquet")
-		q := fmt.Sprintf("COPY %s TO '%s' (FORMAT PARQUET, COMPRESSION ZSTD)", t, path)
+		q := fmt.Sprintf("COPY (SELECT * FROM %s%s) TO '%s' (FORMAT PARQUET, COMPRESSION ZSTD)", t, where, path)
 		if _, err := sdb.ExecContext(ctx, q); err != nil {
 			return nil, fmt.Errorf("export %s: %w", t, err)
 		}
 
 		var n int
-		row := sdb.QueryRowContext(ctx, fmt.Sprintf("SELECT count(*) FROM %s", t))
+		row := sdb.QueryRowContext(ctx, fmt.Sprintf("SELECT count(*) FROM %s%s", t, where))
 		if err := row.Scan(&n); err != nil {
 			return nil, fmt.Errorf("count %s: %w", t, err)
 		}
 		rowCounts[t] = n
 	}
 
+	if vehicles == nil {
+		vehicles = []string{}
+	}
 	meta := &SnapshotMeta{
 		SchemaVersion:  SnapshotSchemaVersion,
 		BuiltAt:        report.BuiltAt,
 		BuildMS:        report.BuildMS,
 		DecoderVersion: report.DecoderVer,
-		BundleCount:    len(report.Bundles),
+		BundleCount:    rowCounts["bundles"],
+		Vehicle:        vehicle,
+		Vehicles:       vehicles,
 		RowCounts:      rowCounts,
 		Tables:         tables,
 	}

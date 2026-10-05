@@ -23,6 +23,7 @@ import (
 	"github.com/ParkWardRR/Cairn/server/internal/store"
 	"github.com/ParkWardRR/Cairn/server/internal/testbundle"
 	"github.com/ParkWardRR/Cairn/server/internal/tsdb"
+	"github.com/ParkWardRR/Cairn/server/internal/vehicles"
 	"github.com/ParkWardRR/Cairn/server/internal/worker"
 )
 
@@ -50,6 +51,7 @@ type env struct {
 	intake   *intake.Service
 	db       *store.Store
 	worker   *worker.Worker
+	regs     *testbundle.Registries
 }
 
 // testLogger discards by default and writes to stderr under
@@ -122,7 +124,7 @@ func newEnv(t *testing.T) *env {
 
 	return &env{
 		root: root, cas: casStore, receipts: rec, registry: reg,
-		outbox: ob, intake: svc, db: db, worker: w,
+		outbox: ob, intake: svc, db: db, worker: w, regs: regs,
 	}
 }
 
@@ -501,8 +503,18 @@ func TestGapsAreRecordedAndNotBridged(t *testing.T) {
 	}
 }
 
-// Property: a sample without a fix is recorded but is not a plottable position.
-func TestFixlessSamplesAreRecordedNotPlotted(t *testing.T) {
+// Property: a sample without a fix is never a position. The decoder sanitizes
+// GNSS at decode time (a receiver reporting no fix, or a fix at null island, is
+// dropped before it can reach the normalized layer), so a fix-less sample must
+// appear neither as a row nor in the route. The absence itself is recorded where
+// it is explicit — as a GNSS_GAP — never as a fabricated (0, 0) coordinate.
+//
+// This test used to assert the opposite (that fix-less rows were kept with
+// fix_type 0). It was stale rather than the decoder wrong: it needs a real
+// PostGIS, so it was skipped in ordinary runs and did not notice the sanitization
+// landing. It is kept, restated, because "no fabricated positions" is a property
+// worth guarding in the database layer too.
+func TestFixlessSamplesAreNeverPositions(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
 
@@ -521,20 +533,25 @@ func TestFixlessSamplesAreRecordedNotPlotted(t *testing.T) {
 
 	root := b.Manifest.ContentRoot
 
-	var total, fixless int
+	var total, fixless, atNullIsland int
 	if err := e.db.Pool().QueryRow(ctx, `
-		SELECT count(*), count(*) FILTER (WHERE fix_type = 0)
+		SELECT count(*), count(*) FILTER (WHERE fix_type = 0),
+		       count(*) FILTER (WHERE latitude = 0 AND longitude = 0)
 		FROM norm.position_samples WHERE content_root = $1
-	`, root[:]).Scan(&total, &fixless); err != nil {
+	`, root[:]).Scan(&total, &fixless, &atNullIsland); err != nil {
 		t.Fatal(err)
 	}
 
-	if fixless == 0 {
-		t.Fatal("no fix-less samples were recorded; the absence is data and must be kept")
+	// 12 samples were written; those from index 10 on report no fix.
+	if total != 10 {
+		t.Errorf("%d position rows, want the 10 that carried a fix", total)
+	}
+	if fixless != 0 || atNullIsland != 0 {
+		t.Errorf("%d fix-less and %d null-island rows reached the database; a "+
+			"position that was never measured must not be stored as one", fixless, atNullIsland)
 	}
 
-	// The trip's sample_count covers every sample, but the route must contain
-	// only the fixed ones.
+	// And the route is built from exactly the fixed points.
 	var routePoints int
 	if err := e.db.Pool().QueryRow(ctx, `
 		SELECT COALESCE(ST_NPoints(route_geom::geometry), 0)
@@ -542,10 +559,8 @@ func TestFixlessSamplesAreRecordedNotPlotted(t *testing.T) {
 	`, root[:]).Scan(&routePoints); err != nil {
 		t.Fatal(err)
 	}
-
-	if routePoints != total-fixless {
-		t.Errorf("the route has %d points but %d samples carried a fix — a fix-less "+
-			"sample must never be plotted", routePoints, total-fixless)
+	if routePoints != total {
+		t.Errorf("the route has %d points but %d samples carried a fix", routePoints, total)
 	}
 }
 
@@ -941,7 +956,7 @@ func TestParityWithDuckDB(t *testing.T) {
 	}
 	defer snap.Close()
 
-	db, err := tsdb.Build(ctx, snap, nil, tsdb.Options{MemoryLimit: "256MB"})
+	db, err := tsdb.Build(ctx, snap, nil, tsdb.Options{MemoryLimit: "256MB", Keys: testbundle.Keys()})
 	if err != nil {
 		t.Fatalf("duckdb build: %v", err)
 	}
@@ -979,5 +994,89 @@ func TestParityWithDuckDB(t *testing.T) {
 			t.Errorf("%s: PostgreSQL has %d rows, DuckDB has %d — the two stores disagree",
 				p.table, pg, p.duck)
 		}
+	}
+}
+
+// A second car on the same dongle. Their rows share a device, and the second
+// bundle shares the first's boot id and timestamps, so only vehicle_id can keep
+// them apart: every table must hold each car's rows under its own vehicle, and the
+// daily rollup must be a vehicle's day, not a device's.
+func TestVehiclesStayApartInTheDatabase(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+
+	second := [16]byte{0x77, 0x01}
+	secondAsg := [16]byte{0x77, 0x02}
+	deviceID := testbundle.DeviceID()
+	if _, err := e.regs.Vehicles.CreateVehicle(vehicles.NewVehicleSpec{
+		ID: hex.EncodeToString(second[:]), DisplayName: "2017 BMW M240i — B58", EngineCode: "B58"}); err != nil {
+		t.Fatal(err)
+	}
+	// The first car's assignment is superseded the moment the device is
+	// reassigned; the second bundle uses the new one at a higher counter.
+	if _, err := e.regs.Vehicles.AssignWithID(hex.EncodeToString(secondAsg[:]),
+		hex.EncodeToString(deviceID[:]), hex.EncodeToString(second[:]), "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	first := testbundle.Default()
+	first.DeviceCounter = 1
+	b1, err := testbundle.Build(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := testbundle.Default()
+	other.VehicleID, other.AssignmentID, other.DeviceCounter = second, secondAsg, 2
+	other.GNSSSamples = 16
+	b2, err := testbundle.Build(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { e.cleanup(t, b1.Manifest.ContentRoot); e.cleanup(t, b2.Manifest.ContentRoot) })
+
+	e.syncBundle(t, b1)
+	e.syncBundle(t, b2)
+	for i := 0; i < 2; i++ {
+		if _, err := e.worker.DrainOnce(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, tc := range []struct {
+		name string
+		root [32]byte
+		veh  [16]byte
+	}{
+		{"first car", b1.Manifest.ContentRoot, testbundle.VehicleID()},
+		{"second car", b2.Manifest.ContentRoot, second},
+	} {
+		// Every row of every table says which car it belongs to.
+		for _, tbl := range []string{"raw.bundles", "norm.position_samples", "norm.obd_samples",
+			"norm.state_transitions", "derived.trips"} {
+			var wrong, total int
+			if err := e.db.Pool().QueryRow(ctx,
+				"SELECT count(*) FILTER (WHERE vehicle_id <> $2), count(*) FROM "+tbl+" WHERE content_root = $1",
+				tc.root[:], tc.veh[:]).Scan(&wrong, &total); err != nil {
+				t.Fatalf("%s %s: %v", tc.name, tbl, err)
+			}
+			if total == 0 {
+				t.Errorf("%s: %s has no rows", tc.name, tbl)
+			}
+			if wrong != 0 {
+				t.Errorf("%s: %d of %d rows in %s carry the wrong vehicle", tc.name, wrong, total, tbl)
+			}
+		}
+	}
+
+	vid := testbundle.VehicleID()
+	// A vehicle's day is its own: two rollups, one per car, never a blend.
+	var rollups int
+	if err := e.db.Pool().QueryRow(ctx,
+		"SELECT count(*) FROM derived.daily_rollups WHERE vehicle_id = ANY($1)",
+		[][]byte{vid[:], second[:]}).Scan(&rollups); err != nil {
+		t.Fatal(err)
+	}
+	if rollups < 2 {
+		t.Errorf("%d rollups for two cars on one device, want one each", rollups)
 	}
 }

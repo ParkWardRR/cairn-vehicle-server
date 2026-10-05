@@ -52,11 +52,11 @@ func buildFromSD(t *testing.T, sd string) *DB {
 	return db
 }
 
-// The pinned digests are the decoder's output at Version 2 for these exact
-// synthetic bundles. If one changes, the decoder changed what it produces: that
-// is either a bug, or a deliberate change, in which case bump decode.Version and
-// update the pins in the same commit so the shift is visible in review rather
-// than discovered later in every chart.
+// The pinned digests are the decoder's output at Version 3 (vehicle_id on every
+// row) for these exact synthetic bundles. If one changes, the decoder changed
+// what it produces: that is either a bug, or a deliberate change, in which case
+// bump decode.Version and update the pins in the same commit so the shift is
+// visible in review rather than discovered later in every chart.
 func TestGoldenDigests(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -67,13 +67,13 @@ func TestGoldenDigests(t *testing.T) {
 		{
 			name:   "default",
 			opts:   testbundle.Default(),
-			digest: "37b4f1bc9adc96bd15ffa5b7fb0475aaf45d55b9c0ce97674c9b977811084260",
+			digest: "52072050d592b06961871a32c3de9ceb01603ffa5b05482b3734dd73dd424fe5",
 			rows:   Counts{Position: 12, OBD: 7, Transition: 4},
 		},
 		{
 			name:   "gap-and-fixless",
 			opts:   testbundle.Options{ChunkSize: 256, GNSSSamples: 20, OBDSamples: 5, JournalEntries: 2, GapAfter: 8, FixlessFrom: 15},
-			digest: "7760c135d8316d8e97d8c669cddc3d8354ea653bb7c187d10ca78a19e39e9d86",
+			digest: "affe5a8840e2c538c09c2333de228c22cf9b2279c29add9893c07101e8994a24",
 			rows:   Counts{Position: 15, OBD: 5, Transition: 2, Gap: 1},
 		},
 	}

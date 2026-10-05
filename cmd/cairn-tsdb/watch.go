@@ -146,7 +146,7 @@ func (s *server) metrics(w http.ResponseWriter, _ *http.Request) {
 
 	fmt.Fprintf(w, "# HELP cairn_tsdb_snapshot_format_bytes Snapshot archive size by format.\n# TYPE cairn_tsdb_snapshot_format_bytes gauge\n")
 	for _, f := range tsdb.SnapshotFormatNames() {
-		data, _, _, _ := s.cur.Load().SnapshotFormat(f)
+		data, _, _, _ := s.cur.Load().SnapshotFormat(f, "")
 		sz := 0
 		if data != nil {
 			sz = len(data)

@@ -75,10 +75,10 @@ func TestTelemetryASOF(t *testing.T) {
 		}
 	}
 	// Two boots. Boost samples at 1000 and 2000 on boot A, 500 on boot B.
-	mustExec(`INSERT INTO obd (boot_id, mono_ms, rpm) VALUES
-		('A', 999, 1000), ('A', 1000, 2000), ('A', 1900, 3000), ('A', 2500, 4000), ('B', 400, 900), ('B', 600, 1100)`)
-	mustExec(`INSERT INTO boost (boot_id, mono_ms, boost_psi) VALUES
-		('A', 1000, 5.0), ('A', 2000, 9.0), ('B', 500, 1.5)`)
+	mustExec(`INSERT INTO obd (vehicle_id, boot_id, mono_ms, rpm) VALUES
+		('v1', 'A', 999, 1000), ('v1', 'A', 1000, 2000), ('v1', 'A', 1900, 3000), ('v1', 'A', 2500, 4000), ('v1', 'B', 400, 900), ('v1', 'B', 600, 1100)`)
+	mustExec(`INSERT INTO boost (vehicle_id, boot_id, mono_ms, boost_psi) VALUES
+		('v1', 'A', 1000, 5.0), ('v1', 'A', 2000, 9.0), ('v1', 'B', 500, 1.5)`)
 
 	res, err := db.Query(context.Background(),
 		"SELECT boot_id, mono_ms, boost_psi, boost_age_ms FROM v_telemetry ORDER BY boot_id, mono_ms", 0)
@@ -138,15 +138,15 @@ func TestDriveSummary(t *testing.T) {
 		}
 	}
 
-	mustExec(`INSERT INTO obd (boot_id, mono_ms, speed_kph, rpm) VALUES
-		('A', 1000, 60, 3000), ('A', 5000, 80, 4000), ('A', 11000, 40, 2000),
-		('B', 2000, 30, 1500), ('B', 8000, 50, 2500)`)
-	mustExec(`INSERT INTO position (boot_id, mono_ms, lat, lon, fix_type, speed_mps) VALUES
-		('A', 1000, 37.0, -122.0, 2, 16.0), ('A', 5000, 37.1, -122.1, 0, NULL)`)
-	mustExec(`INSERT INTO gap (boot_id, seq, duration_ms, expected_samples, cause) VALUES
-		('A', 1, 42000, 42, 4)`)
-	mustExec(`INSERT INTO bundles (content_root, boot_id, warnings) VALUES
-		('abc', 'A', 'MAPSaturated'), ('def', 'B', '')`)
+	mustExec(`INSERT INTO obd (vehicle_id, boot_id, mono_ms, speed_kph, rpm) VALUES
+		('v1', 'A', 1000, 60, 3000), ('v1', 'A', 5000, 80, 4000), ('v1', 'A', 11000, 40, 2000),
+		('v1', 'B', 2000, 30, 1500), ('v1', 'B', 8000, 50, 2500)`)
+	mustExec(`INSERT INTO position (vehicle_id, boot_id, mono_ms, lat, lon, fix_type, speed_mps) VALUES
+		('v1', 'A', 1000, 37.0, -122.0, 2, 16.0), ('v1', 'A', 5000, 37.1, -122.1, 0, NULL)`)
+	mustExec(`INSERT INTO gap (vehicle_id, boot_id, seq, duration_ms, expected_samples, cause) VALUES
+		('v1', 'A', 1, 42000, 42, 4)`)
+	mustExec(`INSERT INTO bundles (vehicle_id, content_root, boot_id, warnings) VALUES
+		('v1', 'abc', 'A', 'MAPSaturated'), ('v1', 'def', 'B', '')`)
 
 	res, err := db.Query(ctx,
 		"SELECT boot_id, duration_s, max_speed_kph, max_rpm, obd_samples, gnss_samples, fix_samples, gap_count, gap_duration_ms, warnings FROM v_drive_summary ORDER BY boot_id", 0)
@@ -210,10 +210,10 @@ func TestTrimMap(t *testing.T) {
 	}
 
 	// OBD at known RPM/load, boost with trims within 2s.
-	mustExec(`INSERT INTO obd (boot_id, mono_ms, rpm, load_pct) VALUES
-		('A', 1000, 2200, 45), ('A', 2000, 2700, 55), ('A', 3000, 3100, 45)`)
-	mustExec(`INSERT INTO boost (boot_id, mono_ms, stft_pct, ltft_pct) VALUES
-		('A',  500, -2, 14), ('A', 1500, -4, 16), ('A', 2800,  0, 12)`)
+	mustExec(`INSERT INTO obd (vehicle_id, boot_id, mono_ms, rpm, load_pct) VALUES
+		('v1', 'A', 1000, 2200, 45), ('v1', 'A', 2000, 2700, 55), ('v1', 'A', 3000, 3100, 45)`)
+	mustExec(`INSERT INTO boost (vehicle_id, boot_id, mono_ms, stft_pct, ltft_pct) VALUES
+		('v1', 'A',  500, -2, 14), ('v1', 'A', 1500, -4, 16), ('v1', 'A', 2800,  0, 12)`)
 
 	res, err := db.Query(ctx,
 		"SELECT boot_id, rpm_bin, load_bin, avg_stft, avg_ltft, samples FROM v_trim_map ORDER BY rpm_bin, load_bin", 0)
@@ -261,8 +261,8 @@ func TestTrimMapAgeFilter(t *testing.T) {
 	}
 
 	// Boost at t=0, OBD at t=5000 — boost is 5s stale, exceeds the 2s threshold.
-	mustExec(`INSERT INTO obd (boot_id, mono_ms, rpm, load_pct) VALUES ('A', 5000, 2000, 40)`)
-	mustExec(`INSERT INTO boost (boot_id, mono_ms, stft_pct, ltft_pct) VALUES ('A', 0, -3, 10)`)
+	mustExec(`INSERT INTO obd (vehicle_id, boot_id, mono_ms, rpm, load_pct) VALUES ('v1', 'A', 5000, 2000, 40)`)
+	mustExec(`INSERT INTO boost (vehicle_id, boot_id, mono_ms, stft_pct, ltft_pct) VALUES ('v1', 'A', 0, -3, 10)`)
 
 	res, err := db.Query(ctx, "SELECT count(*) FROM v_trim_map", 0)
 	if err != nil {
@@ -284,10 +284,10 @@ func TestBoostCurve(t *testing.T) {
 		}
 	}
 
-	mustExec(`INSERT INTO obd (boot_id, mono_ms, rpm) VALUES
-		('A', 1000, 3000), ('A', 2000, 4000), ('A', 3000, 5000)`)
-	mustExec(`INSERT INTO boost (boot_id, mono_ms, boost_psi, map_kpa) VALUES
-		('A',  900, 8.5, 200), ('A', 1900, 12.0, 255), ('A', 2900, 10.0, 230)`)
+	mustExec(`INSERT INTO obd (vehicle_id, boot_id, mono_ms, rpm) VALUES
+		('v1', 'A', 1000, 3000), ('v1', 'A', 2000, 4000), ('v1', 'A', 3000, 5000)`)
+	mustExec(`INSERT INTO boost (vehicle_id, boot_id, mono_ms, boost_psi, map_kpa) VALUES
+		('v1', 'A',  900, 8.5, 200), ('v1', 'A', 1900, 12.0, 255), ('v1', 'A', 2900, 10.0, 230)`)
 
 	res, err := db.Query(ctx,
 		"SELECT rpm, boost_psi, map_kpa, boost_age_ms FROM v_boost_curve ORDER BY mono_ms", 0)
@@ -321,8 +321,8 @@ func TestBoostCurveStaleExcluded(t *testing.T) {
 	}
 
 	// Boost at t=0, OBD at t=5000 — 5s stale, exceeds the 2s threshold.
-	mustExec(`INSERT INTO obd (boot_id, mono_ms, rpm) VALUES ('A', 5000, 3000)`)
-	mustExec(`INSERT INTO boost (boot_id, mono_ms, boost_psi, map_kpa) VALUES ('A', 0, 8.0, 200)`)
+	mustExec(`INSERT INTO obd (vehicle_id, boot_id, mono_ms, rpm) VALUES ('v1', 'A', 5000, 3000)`)
+	mustExec(`INSERT INTO boost (vehicle_id, boot_id, mono_ms, boost_psi, map_kpa) VALUES ('v1', 'A', 0, 8.0, 200)`)
 
 	res, err := db.Query(ctx, "SELECT count(*) FROM v_boost_curve", 0)
 	if err != nil {
@@ -346,17 +346,17 @@ func TestPulls(t *testing.T) {
 
 	// Simulate a WOT pull: throttle >= 70%, RPM rising by > 500.
 	// Non-WOT samples before and after.
-	mustExec(`INSERT INTO obd (boot_id, mono_ms, rpm, throttle_pct, load_pct, speed_kph) VALUES
-		('A', 1000,  2000, 20, 30, 40),
-		('A', 2000,  2500, 85, 80, 50),
-		('A', 3000,  3500, 90, 90, 70),
-		('A', 4000,  4200, 95, 95, 90),
-		('A', 5000,  2000, 15, 20, 60)`)
+	mustExec(`INSERT INTO obd (vehicle_id, boot_id, mono_ms, rpm, throttle_pct, load_pct, speed_kph) VALUES
+		('v1', 'A', 1000,  2000, 20, 30, 40),
+		('v1', 'A', 2000,  2500, 85, 80, 50),
+		('v1', 'A', 3000,  3500, 90, 90, 70),
+		('v1', 'A', 4000,  4200, 95, 95, 90),
+		('v1', 'A', 5000,  2000, 15, 20, 60)`)
 	// Boost during the pull window.
-	mustExec(`INSERT INTO boost (boot_id, mono_ms, boost_psi, lambda_ratio, stft_pct, ltft_pct, map_kpa) VALUES
-		('A', 2100, 8.0,  0.82, -2, 14, 200),
-		('A', 3100, 12.0, 0.80,  0, 14, 230),
-		('A', 3900, 14.0, 0.78,  1, 14, 250)`)
+	mustExec(`INSERT INTO boost (vehicle_id, boot_id, mono_ms, boost_psi, lambda_ratio, stft_pct, ltft_pct, map_kpa) VALUES
+		('v1', 'A', 2100, 8.0,  0.82, -2, 14, 200),
+		('v1', 'A', 3100, 12.0, 0.80,  0, 14, 230),
+		('v1', 'A', 3900, 14.0, 0.78,  1, 14, 250)`)
 
 	res, err := db.Query(ctx,
 		"SELECT boot_id, start_ms, end_ms, min_rpm, max_rpm, obd_samples, peak_boost_psi, avg_lambda, avg_stft, avg_ltft FROM v_pulls", 0)
@@ -394,10 +394,10 @@ func TestPullsNoPull(t *testing.T) {
 	}
 
 	// Throttle high but RPM doesn't rise enough — no pull detected.
-	mustExec(`INSERT INTO obd (boot_id, mono_ms, rpm, throttle_pct, load_pct) VALUES
-		('A', 1000, 2000, 80, 50),
-		('A', 2000, 2300, 85, 55),
-		('A', 3000, 2100, 75, 45)`)
+	mustExec(`INSERT INTO obd (vehicle_id, boot_id, mono_ms, rpm, throttle_pct, load_pct) VALUES
+		('v1', 'A', 1000, 2000, 80, 50),
+		('v1', 'A', 2000, 2300, 85, 55),
+		('v1', 'A', 3000, 2100, 75, 45)`)
 
 	res, err := db.Query(ctx, "SELECT count(*) FROM v_pulls", 0)
 	if err != nil {
@@ -420,9 +420,9 @@ func TestSpeedAgreement(t *testing.T) {
 	}
 
 	// OBD speed 100 kph, GNSS speed 100/3.6 mps at similar time. Fix type 2 (3D).
-	mustExec(`INSERT INTO obd (boot_id, mono_ms, speed_kph) VALUES ('A', 1000, 100)`)
-	mustExec(`INSERT INTO position (boot_id, mono_ms, speed_mps, fix_type, lat, lon) VALUES
-		('A', 800, 27.78, 2, 37.0, -122.0)`)
+	mustExec(`INSERT INTO obd (vehicle_id, boot_id, mono_ms, speed_kph) VALUES ('v1', 'A', 1000, 100)`)
+	mustExec(`INSERT INTO position (vehicle_id, boot_id, mono_ms, speed_mps, fix_type, lat, lon) VALUES
+		('v1', 'A', 800, 27.78, 2, 37.0, -122.0)`)
 
 	res, err := db.Query(ctx,
 		"SELECT obd_speed_kph, gnss_speed_kph, ratio, gnss_age_ms FROM v_speed_agreement", 0)
@@ -459,9 +459,9 @@ func TestSpeedAgreementNoFixExcluded(t *testing.T) {
 	}
 
 	// fix_type = 0 (no fix) — excluded from v_speed_agreement.
-	mustExec(`INSERT INTO obd (boot_id, mono_ms, speed_kph) VALUES ('A', 1000, 60)`)
-	mustExec(`INSERT INTO position (boot_id, mono_ms, speed_mps, fix_type, lat, lon) VALUES
-		('A', 800, 16.7, 0, 0.0, 0.0)`)
+	mustExec(`INSERT INTO obd (vehicle_id, boot_id, mono_ms, speed_kph) VALUES ('v1', 'A', 1000, 60)`)
+	mustExec(`INSERT INTO position (vehicle_id, boot_id, mono_ms, speed_mps, fix_type, lat, lon) VALUES
+		('v1', 'A', 800, 16.7, 0, 0.0, 0.0)`)
 
 	res, err := db.Query(ctx, "SELECT count(*) FROM v_speed_agreement", 0)
 	if err != nil {
@@ -511,19 +511,19 @@ func BenchmarkScale(b *testing.B) {
 				boot := "boot-" + strconv.Itoa(i/100_000)
 				ms := uint32(i%100_000) * 100
 				rpm := int16(800 + (i*37)%5800)
-				if err := obd.AppendRow("r", boot, ms, uint32(i), now,
+				if err := obd.AppendRow("v", "r", boot, ms, uint32(i), now,
 					int16(i%140), rpm, int16(i%100), int16(i%95), int16(80+i%20), int16(30),
 					nil, int16(i%40), uint8(0), uint32(0), uint32(0), int32(100), uint16(0)); err != nil {
 					return err
 				}
-				if err := boost.AppendRow("r", boot, ms/4*4+uint32(i%3), uint32(i), now,
+				if err := boost.AppendRow("v", "r", boot, ms/4*4+uint32(i%3), uint32(i), now,
 					uint16(100+i%160), uint8(100), uint16(2000), uint16(10000), uint16(30000), int8(30),
 					int8(i%10-5), int8(i%6-3), float64(i%20)-2, 1.0+float64(i%10)/100,
 					uint32(0), uint32(0), uint16(40)); err != nil {
 					return err
 				}
 				if i%2 == 0 {
-					if err := pos.AppendRow("r", boot, ms, uint32(i), now,
+					if err := pos.AppendRow("v", "r", boot, ms, uint32(i), now,
 						37.0, -122.0, 10.0, float64(i%60), 90.0, uint8(3),
 						int16(12), int16(14), 0.9, 1.2, 2.0, int32(20), uint8(0), uint16(0)); err != nil {
 						return err
@@ -542,7 +542,7 @@ func BenchmarkScale(b *testing.B) {
 			b.Fatal(err)
 		}
 		for _, tbl := range []string{"obd", "boost", "position"} {
-			if _, err := db.db.Exec("CREATE OR REPLACE TABLE " + tbl + " AS SELECT * FROM " + tbl + " ORDER BY boot_id, mono_ms, seq"); err != nil {
+			if _, err := db.db.Exec("CREATE OR REPLACE TABLE " + tbl + " AS SELECT * FROM " + tbl + " ORDER BY vehicle_id, boot_id, mono_ms, seq"); err != nil {
 				b.Fatal(err)
 			}
 		}

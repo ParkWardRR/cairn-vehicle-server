@@ -225,7 +225,7 @@ func TestSnapshotFormats(t *testing.T) {
 		{"tar", "application/x-tar"},
 	} {
 		t.Run(tc.format, func(t *testing.T) {
-			data, ct, digest, meta := db.SnapshotFormat(tc.format)
+			data, ct, digest, meta := db.SnapshotFormat(tc.format, "")
 			if data == nil {
 				t.Fatal("data nil")
 			}
@@ -289,9 +289,9 @@ func TestSnapshotFormats(t *testing.T) {
 	}
 
 	// Digests must differ across formats.
-	_, _, dZstd, _ := db.SnapshotFormat("zstd")
-	_, _, dGzip, _ := db.SnapshotFormat("gzip")
-	_, _, dTar, _ := db.SnapshotFormat("tar")
+	_, _, dZstd, _ := db.SnapshotFormat("zstd", "")
+	_, _, dGzip, _ := db.SnapshotFormat("gzip", "")
+	_, _, dTar, _ := db.SnapshotFormat("tar", "")
 	if dZstd == dGzip {
 		t.Error("zstd and gzip digests should differ")
 	}

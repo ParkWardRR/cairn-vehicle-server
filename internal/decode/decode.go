@@ -45,7 +45,12 @@ import (
 // at a higher version and the two outputs can be compared bundle by bundle.
 //
 // Version 2 adds the GNSS jump gate and lowers the reported-speed cap.
-const Version = 2
+//
+// Version 3 carries the manifest's vehicle_id on every row and folds it into
+// the output digest. The samples themselves are unchanged; the digest moves
+// because the output now says which car it belongs to, and a store keyed by
+// vehicle must not be able to hold a v2 row that does not.
+const Version = 3
 
 // Result is what one decode produced.
 type Result struct {
@@ -56,6 +61,13 @@ type Result struct {
 	// BootID is part of the ordering identity (boot_id, seq), so it belongs on
 	// every normalized row rather than only on the bundle.
 	BootID [16]byte
+
+	// VehicleID is the car the manifest binds this bundle to (intake has
+	// already checked it against the assignment). It is copied onto every row
+	// below, because every analysis downstream is per vehicle: a fuel-trim map
+	// from one engine must never be averaged with another's, and a row that
+	// does not say which car it came from cannot be kept apart.
+	VehicleID [16]byte
 
 	Positions   []Position
 	IMU         []IMU
@@ -114,31 +126,48 @@ func (r *Result) OutputDigest() [32]byte {
 	h.Write([]byte("cairn-decode-v"))
 	write(int64(Version))
 	h.Write(r.ContentRoot[:])
+	h.Write(r.VehicleID[:])
 
+	// Each row's own vehicle is hashed too, in row order, not just the
+	// bundle's: a row that lost or changed its vehicle is exactly the
+	// cross-car contamination the key exists to prevent, and it must move the
+	// digest.
 	for i := range r.Positions {
 		p := &r.Positions[i]
-		write(int64(p.Seq), p.ObservedAt.UTC().Format(time.RFC3339Nano),
+		write(p.VehicleID[:], int64(p.Seq), p.ObservedAt.UTC().Format(time.RFC3339Nano),
 			p.Latitude, p.Longitude, int64(p.FixType))
 	}
 	for i := range r.IMU {
 		s := &r.IMU[i]
-		write(int64(s.Seq), int64(s.AccelRMSmg), int64(s.EventFlags))
+		write(s.VehicleID[:], int64(s.Seq), int64(s.AccelRMSmg), int64(s.EventFlags))
 	}
 	for i := range r.OBD {
 		s := &r.OBD[i]
-		write(int64(s.Seq), int64(s.PIDsAnswered))
+		write(s.VehicleID[:], int64(s.Seq), int64(s.PIDsAnswered))
+	}
+	for i := range r.Boost {
+		b := &r.Boost[i]
+		write(b.VehicleID[:], int64(b.Seq))
+	}
+	for i := range r.Status {
+		s := &r.Status[i]
+		write(s.VehicleID[:], int64(s.Seq))
+	}
+	for i := range r.Transitions {
+		t := &r.Transitions[i]
+		write(t.VehicleID[:], int64(t.Seq))
 	}
 	for i := range r.Gaps {
 		g := &r.Gaps[i]
-		write(int64(g.Seq), int64(g.DurationMS), int64(g.Cause))
+		write(g.VehicleID[:], int64(g.Seq), int64(g.DurationMS), int64(g.Cause))
 	}
 	for i := range r.Events {
 		e := &r.Events[i]
 		h.Write(e.EventID[:])
-		write(e.Kind, int64(e.Seq))
+		write(e.VehicleID[:], e.Kind, int64(e.Seq))
 	}
 	if r.Trip != nil {
-		write(r.Trip.DistanceM, int64(r.Trip.DurationS), int64(r.Trip.SampleCount),
+		write(r.Trip.VehicleID[:], r.Trip.DistanceM, int64(r.Trip.DurationS), int64(r.Trip.SampleCount),
 			int64(r.Trip.GapCount))
 	}
 
@@ -149,6 +178,9 @@ func (r *Result) OutputDigest() [32]byte {
 
 // Position is a decoded GNSS observation ready for the normalized layer.
 type Position struct {
+	// VehicleID is the bundle's vehicle, carried per row (see Result.VehicleID).
+	VehicleID [16]byte
+
 	Seq         uint32
 	ObservedAt  time.Time
 	MonotonicMS uint32
@@ -173,6 +205,8 @@ type Position struct {
 
 // IMU is a decoded motion window.
 type IMU struct {
+	VehicleID [16]byte
+
 	Seq         uint32
 	ObservedAt  time.Time
 	MonotonicMS uint32
@@ -191,6 +225,8 @@ type IMU struct {
 
 // OBD is a decoded engine observation.
 type OBD struct {
+	VehicleID [16]byte
+
 	Seq         uint32
 	ObservedAt  time.Time
 	MonotonicMS uint32
@@ -213,6 +249,8 @@ type OBD struct {
 
 // Status is a decoded health snapshot.
 type Status struct {
+	VehicleID [16]byte
+
 	Seq         uint32
 	ObservedAt  time.Time
 	MonotonicMS uint32
@@ -230,6 +268,8 @@ type Status struct {
 
 // Transition is a decoded lifecycle journal record.
 type Transition struct {
+	VehicleID [16]byte
+
 	Seq         uint32
 	ObservedAt  time.Time
 	MonotonicMS uint32
@@ -247,6 +287,8 @@ type Transition struct {
 
 // Gap is a recorded absence of position.
 type Gap struct {
+	VehicleID [16]byte
+
 	Seq             uint32
 	StartedAt       time.Time
 	DurationMS      uint32
@@ -257,6 +299,9 @@ type Gap struct {
 // Trip is the derived journey.
 type Trip struct {
 	TripID [16]byte
+
+	// VehicleID scopes the trip: trips, stops and rollups are per car.
+	VehicleID [16]byte
 
 	StartedAt time.Time
 	EndedAt   time.Time
@@ -303,7 +348,8 @@ type Event struct {
 	// EventID is deterministic: a hash over (content_root, kind, seq). Two
 	// decodes of the same bundle produce the same identity, so a downstream
 	// consumer can deduplicate with no coordination.
-	EventID [16]byte
+	EventID   [16]byte
+	VehicleID [16]byte
 
 	Kind       string
 	OccurredAt time.Time
@@ -362,6 +408,7 @@ func (d *Decoder) Decode(ctx context.Context, in Input) (*Result, error) {
 		DeviceID:    manifest.DeviceID,
 		BundleID:    manifest.BundleID,
 		BootID:      manifest.BootID,
+		VehicleID:   manifest.VehicleID,
 	}
 
 	// Capture segments form one chain; the journal is a separate chain with its
@@ -496,6 +543,7 @@ func (r *Result) decodeFrame(manifest *format.Manifest, f *format.Frame, segment
 			return
 		}
 		r.IMU = append(r.IMU, IMU{
+			VehicleID:    manifest.VehicleID,
 			Seq:          f.Seq,
 			ObservedAt:   observedAt(manifest, f.MonotonicMS, 0),
 			MonotonicMS:  f.MonotonicMS,
@@ -542,6 +590,7 @@ func (r *Result) decodeFrame(manifest *format.Manifest, f *format.Frame, segment
 			return
 		}
 		r.Transitions = append(r.Transitions, Transition{
+			VehicleID:     manifest.VehicleID,
 			Seq:           f.Seq,
 			ObservedAt:    observedAt(manifest, f.MonotonicMS, 0),
 			MonotonicMS:   f.MonotonicMS,
@@ -563,6 +612,7 @@ func (r *Result) decodeFrame(manifest *format.Manifest, f *format.Frame, segment
 			return
 		}
 		r.Gaps = append(r.Gaps, Gap{
+			VehicleID:       manifest.VehicleID,
 			Seq:             f.Seq,
 			StartedAt:       observedAt(manifest, f.MonotonicMS, 0),
 			DurationMS:      g.DurationMS,
@@ -577,6 +627,7 @@ func (r *Result) decodeFrame(manifest *format.Manifest, f *format.Frame, segment
 			return
 		}
 		ev := Event{
+			VehicleID:  manifest.VehicleID,
 			EventID:    eventID(r.ContentRoot, "device.marker", f.Seq),
 			Kind:       "device.marker",
 			OccurredAt: observedAt(manifest, f.MonotonicMS, 0),
@@ -612,6 +663,7 @@ func newPosition(manifest *format.Manifest, f *format.Frame, s *format.GNSSSampl
 	}
 
 	p := Position{
+		VehicleID:   manifest.VehicleID,
 		Seq:         f.Seq,
 		ObservedAt:  observedAt(manifest, f.MonotonicMS, s.UTCOffsetMS),
 		MonotonicMS: f.MonotonicMS,
@@ -659,6 +711,7 @@ func newPosition(manifest *format.Manifest, f *format.Frame, s *format.GNSSSampl
 
 func newOBD(manifest *format.Manifest, f *format.Frame, s *format.OBDSnapshot) OBD {
 	o := OBD{
+		VehicleID:     manifest.VehicleID,
 		Seq:           f.Seq,
 		ObservedAt:    observedAt(manifest, f.MonotonicMS, 0),
 		MonotonicMS:   f.MonotonicMS,
@@ -704,6 +757,7 @@ func newOBD(manifest *format.Manifest, f *format.Frame, s *format.OBDSnapshot) O
 
 func newStatus(manifest *format.Manifest, f *format.Frame, s *format.DeviceHealth) Status {
 	st := Status{
+		VehicleID:   manifest.VehicleID,
 		Seq:         f.Seq,
 		ObservedAt:  observedAt(manifest, f.MonotonicMS, 0),
 		MonotonicMS: f.MonotonicMS,
@@ -785,6 +839,8 @@ func eventID(contentRoot [32]byte, kind string, seq uint32) [16]byte {
 // missing barometric reading makes gauge pressure uncomputable, and refusing to
 // assume sea level is deliberate.
 type Boost struct {
+	VehicleID [16]byte
+
 	Seq         uint32
 	ObservedAt  time.Time
 	MonotonicMS uint32
@@ -812,6 +868,7 @@ type Boost struct {
 
 func newBoost(manifest *format.Manifest, f *format.Frame, o *format.OBDExtended) Boost {
 	b := Boost{
+		VehicleID:        manifest.VehicleID,
 		Seq:              f.Seq,
 		ObservedAt:       observedAt(manifest, f.MonotonicMS, 0),
 		MonotonicMS:      f.MonotonicMS,

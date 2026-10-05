@@ -150,9 +150,10 @@ func (s *Store) RecordBundle(ctx context.Context, c BundleCommit) error {
 			capture_started_monotonic_us, capture_ended_monotonic_us,
 			utc_basis_ms, utc_basis_acc_ms, first_seq, last_seq,
 			recovery_state, discarded_tail_bytes, policy_version,
-			bytes_stored, committed_at, record_counts
+			bytes_stored, committed_at, record_counts,
+			vehicle_id, assignment_id, device_counter, storage_key_version
 		) VALUES (
-			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19
+			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23
 		)
 		ON CONFLICT (bundle_id) DO NOTHING
 	`,
@@ -162,6 +163,7 @@ func (s *Store) RecordBundle(ctx context.Context, c BundleCommit) error {
 		int64(m.UTCBasisMS), int64(m.UTCBasisAccMS), int64(m.FirstSeq), int64(m.LastSeq),
 		int16(m.RecoveryState), int64(m.DiscardedTailBytes), int16(m.PolicyVersion),
 		c.BytesStored, c.CommittedAt, counts,
+		m.VehicleID[:], m.AssignmentID[:], int64(m.DeviceCounter), int32(m.StorageKeyVersion),
 	); err != nil {
 		return fmt.Errorf("insert bundle: %w", err)
 	}
