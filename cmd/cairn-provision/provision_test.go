@@ -14,10 +14,10 @@ import (
 )
 
 const (
-	devID   = "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
-	devFP   = "5fd41190"
-	vehID   = "606162636465666768696a6b6c6d6e6f"
-	asgID   = "707172737475767778797a7b7c7d7e7f"
+	devID = "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
+	devFP = "5fd41190"
+	vehID = "606162636465666768696a6b6c6d6e6f"
+	asgID = "707172737475767778797a7b7c7d7e7f"
 )
 
 // fakeDevice speaks the console protocol the firmware speaks, including the

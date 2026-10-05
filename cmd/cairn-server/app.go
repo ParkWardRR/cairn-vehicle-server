@@ -18,6 +18,7 @@ import (
 	"github.com/ParkWardRR/Cairn/server/internal/clients"
 	"github.com/ParkWardRR/Cairn/server/internal/devices"
 	"github.com/ParkWardRR/Cairn/server/internal/httpapi"
+	"github.com/ParkWardRR/Cairn/server/internal/intake"
 	"github.com/ParkWardRR/Cairn/server/internal/syncapi"
 	"github.com/ParkWardRR/Cairn/server/internal/vehicles"
 )
@@ -81,7 +82,7 @@ func registerAppFlags(f *appFlags) {
 // startApp opens the app API's state and starts its listener. It returns a
 // shutdown function.
 func startApp(f appFlags, cfg runConfig, deviceReg *devices.Registry, vehicleReg *vehicles.Registry,
-	limiter *httpapi.Limiter, log *slog.Logger) (func(context.Context) error, error) {
+	svc *intake.Service, limiter *httpapi.Limiter, log *slog.Logger) (func(context.Context) error, error) {
 
 	if f.serveAddr != "" && !syncapi.IsLoopbackAddr(f.serveAddr) {
 		return nil, errors.New("-app-serve-addr must be a loopback address: it is plain HTTP, " +
@@ -159,6 +160,9 @@ func startApp(f appFlags, cfg runConfig, deviceReg *devices.Registry, vehicleReg
 
 	api, err := syncapi.New(syncapi.Config{
 		Clients: clientReg, Vehicles: vehicleReg, Devices: deviceReg, Store: store, Audit: auditLog,
+		// The bundle relay: the same intake service the device listener uses, so
+		// a bundle is accepted or refused by exactly the same rules either way.
+		Intake: svc,
 		Classifier: &syncapi.Classifier{
 			LAN: lan, Tailnet: tailnet, TrustServe: f.trustServe,
 			RequireIdentity: f.requireIdentity, AllowLogins: f.allowLogins, DenyOther: f.denyOther,

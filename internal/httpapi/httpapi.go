@@ -389,6 +389,8 @@ func (s *Server) failIntake(w http.ResponseWriter, r *http.Request, err error) {
 		s.fail(w, r, http.StatusNotFound, "no offer on record for this bundle", err)
 	case errors.Is(err, intake.ErrChunkNotInManifest):
 		s.fail(w, r, http.StatusBadRequest, "chunk is not part of this bundle", err)
+	case errors.Is(err, intake.ErrChunkLength):
+		s.fail(w, r, http.StatusBadRequest, "chunk length does not match the manifest", err)
 	case errors.Is(err, intake.ErrChunksMissing):
 		// Not an error the device should give up on: it simply has more to send.
 		s.fail(w, r, http.StatusConflict, "chunks are still missing", err)

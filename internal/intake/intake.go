@@ -45,6 +45,11 @@ var (
 	// ErrChunkNotInManifest means the chunk's digest does not appear in the
 	// offered manifest's chunk descriptors.
 	ErrChunkNotInManifest = errors.New("chunk digest is not in the manifest")
+
+	// ErrChunkLength means a chunk's size differs from the manifest's descriptor
+	// for that digest, or exceeds the maximum. It is the caller's error, not the
+	// server's: a transport must not report it as an internal failure.
+	ErrChunkLength = errors.New("chunk length does not match the manifest")
 	// ErrChunksMissing means commit was attempted before every chunk arrived.
 	ErrChunksMissing = errors.New("cannot commit: chunks are still missing")
 	// ErrManifestInconsistent means the manifest contradicts itself — its
@@ -397,7 +402,7 @@ func (s *Service) missingChunks(m *format.Manifest) ([]uint32, int64, error) {
 // means a duplicate delivery is a no-op rather than a corruption.
 func (s *Service) AcceptChunk(bundleID [16]byte, digest [32]byte, data []byte) ([]uint32, error) {
 	if len(data) > MaxChunkSize {
-		return nil, fmt.Errorf("chunk is %d bytes, maximum is %d", len(data), MaxChunkSize)
+		return nil, fmt.Errorf("%w: chunk is %d bytes, maximum is %d", ErrChunkLength, len(data), MaxChunkSize)
 	}
 
 	manifest, _, _, err := s.loadOffer(bundleID)
@@ -418,8 +423,8 @@ func (s *Service) AcceptChunk(bundleID [16]byte, digest [32]byte, data []byte) (
 		return nil, fmt.Errorf("%w: %x", ErrChunkNotInManifest, digest)
 	}
 	if int(descriptor.ByteLength) != len(data) {
-		return nil, fmt.Errorf("chunk %d is %d bytes, manifest declares %d",
-			descriptor.Index, len(data), descriptor.ByteLength)
+		return nil, fmt.Errorf("%w: chunk %d is %d bytes, manifest declares %d",
+			ErrChunkLength, descriptor.Index, len(data), descriptor.ByteLength)
 	}
 
 	// Put verifies the digest, so a corrupt chunk is rejected here rather than

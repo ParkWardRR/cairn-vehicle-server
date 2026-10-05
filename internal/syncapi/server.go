@@ -23,6 +23,7 @@ import (
 	"github.com/ParkWardRR/Cairn/server/internal/clients"
 	"github.com/ParkWardRR/Cairn/server/internal/devices"
 	"github.com/ParkWardRR/Cairn/server/internal/httpapi"
+	"github.com/ParkWardRR/Cairn/server/internal/intake"
 	"github.com/ParkWardRR/Cairn/server/internal/jsonstore"
 	"github.com/ParkWardRR/Cairn/server/internal/vehicles"
 )
@@ -56,8 +57,13 @@ type Config struct {
 	Clients  *clients.Registry
 	Vehicles *vehicles.Registry
 	Devices  *devices.Registry
-	Store    *Store
-	Audit    *audit.Log
+
+	// Intake, when set, enables the bundle relay (relay.go): the enrolled phone
+	// uploads a dongle's sealed bundles on its behalf. Nil leaves the relay
+	// routes unregistered, so a deployment without it presents no such surface.
+	Intake *intake.Service
+	Store  *Store
+	Audit  *audit.Log
 
 	Classifier *Classifier
 
@@ -147,6 +153,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /v1/sync/pull", s.route("GET /v1/sync/pull", authEither, s.handlePull))
 	mux.HandleFunc("POST /v1/sync/ack", s.route("POST /v1/sync/ack", authEither, s.handleAck))
 
+	if s.cfg.Intake != nil {
+		s.registerRelay(mux)
+	}
+
 	mux.HandleFunc("GET /v1/snapshot", s.route("GET /v1/snapshot", authEither, s.handleSnapshot))
 
 	mux.HandleFunc("GET /v1/devices", s.route("GET /v1/devices", authAdmin, s.handleListDevices))
@@ -193,6 +203,12 @@ type handler func(*request) (status int, reason string)
 //  5. Authentication.
 //  6. The handler, then one audit entry whatever happened.
 func (s *Server) route(pattern string, mode authMode, h handler) http.HandlerFunc {
+	return s.routeLimit(pattern, mode, maxBody, h)
+}
+
+// routeLimit is route with its own bound on the request body. Everything but the
+// bundle relay's chunk upload uses the 1 MiB default.
+func (s *Server) routeLimit(pattern string, mode authMode, limit int, h handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		info := s.cfg.Classifier.Classify(r)
 		req := &request{w: w, r: r, info: info}
@@ -245,8 +261,8 @@ func (s *Server) route(pattern string, mode authMode, h handler) http.HandlerFun
 			return
 		}
 
-		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody+1))
-		if err != nil || len(body) > maxBody {
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, int64(limit)+1))
+		if err != nil || len(body) > limit {
 			s.writeError(w, http.StatusRequestEntityTooLarge, "body_too_large", "request body too large")
 			finish(http.StatusRequestEntityTooLarge, "body too large")
 			return
