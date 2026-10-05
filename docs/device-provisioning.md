@@ -32,6 +32,16 @@ NVS. This firmware erases them at boot (`cairn_prov_erase_legacy_credentials`) a
 refuses to accept them again, so a dongle that was provisioned the old way is cleaned
 by simply flashing the new build.
 
+**Limit, measured on the car's dongle.** Erasing an NVS entry only marks it deleted;
+the bytes stay in flash until NVS recycles that page. The boot-time scrub forces a
+lot of recycling, and it overwrote the old **private key and certificate** (large
+blobs, mostly-deleted pages), but a **Wi-Fi password** the Wi-Fi stack had saved in
+its own NVS namespace survived in a page that also holds live entries. So the
+guarantee is: no key or certificate remains, and the old credentials are no longer
+used or reachable through any API; a password may remain readable to someone who
+dumps the chip's flash, until flash encryption exists (Phase 24). If a unit that ran
+earlier firmware is ever lost, change the Wi-Fi password.
+
 NVS is plain until flash encryption and NVS encryption arrive together in
 ROADMAP Phase 24. Until then the device protects the **card**, not the **chip**:
 someone who dumps the chip's flash can read the storage root. That is the reason a
