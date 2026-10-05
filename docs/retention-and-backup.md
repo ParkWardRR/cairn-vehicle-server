@@ -20,7 +20,7 @@ Device Recording ──► Finalized ──► Queued ──► Uploading ──
 |-------|----------|----------|
 | `recording` | Active file on microSD | Trip being written with periodic fsync/checkpoints |
 | `finalized` | microSD | Immutable bundle; complete and hashable |
-| `queued` | microSD | Awaiting trusted home Wi-Fi to begin upload |
+| `queued` | microSD | Sealed; awaiting the enrolled phone to pull it over BLE |
 | `uploading` | microSD + server staging | Chunked transfer in progress |
 | `acknowledged` | microSD + server durable store | Server receipt stored locally |
 | `retained` | microSD | Kept for configurable safety window |

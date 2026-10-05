@@ -1,5 +1,12 @@
 # Deploying the ingest server
 
+> **Amended 2026-10-05.** The dongle no longer has Wi-Fi and does not use the
+> `:8443` mTLS listener described here; the enrolled phone relays its bundles through
+> the app API ([app-sync-protocol.md](app-sync-protocol.md) §13). This page describes
+> the legacy device path, which stays deployed until the relay is proven on hardware
+> and is then retired (Cairn #7). The current deployment is
+> `deploy/deploy-v3.sh`; see also [tailscale-deployment.md](tailscale-deployment.md).
+
 What is actually running, and why each piece is where it is. Current as of
 2026-10-01, when the server first went up as a real service.
 
@@ -84,7 +91,7 @@ ESP32 supports it and it is far cheaper than RSA on a handshake the device
 performs on battery.
 
 ```bash
-./make-certs.sh init   cairn.alpina.casa   # CA + server certificate
+./make-certs.sh init   cairn.example.lan   # CA + server certificate
 ./make-certs.sh device <32-hex-device-id>  # one client certificate
 ./make-certs.sh ca-literal                 # CA as a C string literal
 ```
@@ -153,11 +160,11 @@ cairn-server -data /var/lib/cairn -print-receipt-key
 
 ```bash
 # Must be refused: no client certificate.
-curl --cacert ca.pem https://cairn.alpina.casa:8443/api/v2/bundles/offer
+curl --cacert ca.pem https://cairn.example.lan:8443/api/v2/bundles/offer
 
 # Must reach the handler, which then complains about the body rather than TLS.
 curl --cacert ca.pem --cert client.crt --key client.key \
-  -X POST https://cairn.alpina.casa:8443/api/v2/bundles/offer
+  -X POST https://cairn.example.lan:8443/api/v2/bundles/offer
 # → 400 missing X-Cairn-Signature
 
 # What the pipeline actually recorded. Three things to get right at once:
