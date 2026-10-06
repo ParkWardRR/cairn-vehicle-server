@@ -111,7 +111,12 @@ type app struct {
 // enrol runs the full invitation flow and returns a signing client.
 func (e *env) enrol(role clients.Role, scope ...string) *app {
 	e.t.Helper()
-	code, _, err := e.clients.CreateInvite(clients.InviteSpec{Role: role, Vehicles: scope, Name: "test phone", CreatedBy: "test"})
+	return e.enrolWith(clients.InviteSpec{Role: role, Vehicles: scope, Name: "test phone", CreatedBy: "test"})
+}
+
+func (e *env) enrolWith(spec clients.InviteSpec) *app {
+	e.t.Helper()
+	code, _, err := e.clients.CreateInvite(spec)
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -298,6 +303,37 @@ func TestEnrolmentIsSingleUseAndRequiresProofOfPossession(t *testing.T) {
 	// A code works once.
 	if r := e.rawPost("/v1/enroll/app", mk(key), ""); r.StatusCode == http.StatusCreated {
 		t.Fatal("an invitation was used twice")
+	}
+}
+
+// Key rotation: a restored phone enrols a fresh key under an invitation that names the
+// client it replaces. The old key stops working in the same write the new one starts.
+func TestKeyRotationRevokesTheOldClientAtomically(t *testing.T) {
+	e := newEnv(t)
+	old := e.enrol(clients.RoleUser, clients.ScopeAll)
+	if r := old.do("GET", "/v1/sync/pull", nil); r.StatusCode != 200 {
+		t.Fatalf("old client before rotation: %d", r.StatusCode)
+	}
+	oldRec, _ := e.clients.Get(old.id)
+
+	fresh := e.enrolWith(clients.InviteSpec{
+		Role: clients.RoleUser, Vehicles: []string{clients.ScopeAll}, Name: "restored phone",
+		CreatedBy: "test", Replaces: old.id,
+	})
+
+	if r := old.do("GET", "/v1/sync/pull", nil); r.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("old key after rotation: %d, want 401", r.StatusCode)
+	}
+	if r := fresh.do("GET", "/v1/sync/pull", nil); r.StatusCode != 200 {
+		t.Fatalf("new key after rotation: %d", r.StatusCode)
+	}
+	o, _ := e.clients.Get(old.id)
+	n, _ := e.clients.Get(fresh.id)
+	if o.Active() || o.RevokedReason != "replaced by "+fresh.id {
+		t.Fatalf("old client: status %s reason %q", o.Status, o.RevokedReason)
+	}
+	if n.Replaces != old.id || n.OwnerID != oldRec.OwnerID {
+		t.Fatalf("new client lineage/owner: replaces %q owner %q (old owner %q)", n.Replaces, n.OwnerID, oldRec.OwnerID)
 	}
 }
 
