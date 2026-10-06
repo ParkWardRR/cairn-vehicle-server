@@ -299,7 +299,9 @@ func run(cfg runConfig) error {
 	limiter := httpapi.NewLimiter(120, 2)
 
 	api := httpapi.New(httpapi.Config{
-		Intake:            svc,
+		// The device listener is the dongle talking to the server itself, so the ledger
+		// records its bundles as wifi-direct; the phone relay below is ble-relay.
+		Intake:            svc.WithPath(ledger.PathWiFiDirect),
 		Receipts:          receiptStore,
 		Registry:          registry,
 		Outbox:            queue,
@@ -356,7 +358,7 @@ func run(cfg runConfig) error {
 	// dongle's allowance.
 	var stopApp func(context.Context) error
 	if cfg.app.addr != "" || cfg.app.serveAddr != "" || cfg.app.localAddr != "" {
-		stopApp, err = startApp(cfg.app, cfg, registry, vehicleReg, svc, httpapi.NewLimiter(240, 4), cfg.log)
+		stopApp, err = startApp(cfg.app, cfg, registry, vehicleReg, svc.WithPath(ledger.PathBLERelay), httpapi.NewLimiter(240, 4), cfg.log)
 		if err != nil {
 			return fmt.Errorf("start app API: %w", err)
 		}

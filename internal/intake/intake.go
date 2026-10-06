@@ -92,6 +92,9 @@ type Service struct {
 	// ledger means no record, never a failed ingest — an audit trail must not
 	// be able to refuse data that is otherwise valid.
 	ledger *ledger.Ledger
+
+	// path labels this view's ledger entries; see WithPath. Empty on the base service.
+	path string
 }
 
 // Config configures a Service.
@@ -120,7 +123,24 @@ func (s *Service) record(e ledger.Entry) {
 	if s.ledger == nil {
 		return
 	}
+	if e.Path == "" {
+		e.Path = s.path
+	}
 	_ = s.ledger.Append(e)
+}
+
+// WithPath returns a view of the service whose ledger entries name the path the caller
+// brings bundles by (ledger.PathBLERelay and friends). It shares every piece of state with
+// the service it was made from, so the two accept and refuse bundles by exactly the same
+// rules; only the label on the lifecycle record differs. An unrecognised path is refused
+// rather than recorded, because the store reports whatever is written here.
+func (s *Service) WithPath(path string) *Service {
+	if !ledger.ValidPath(path) {
+		panic("intake: unknown bundle path " + path)
+	}
+	c := *s
+	c.path = path
+	return &c
 }
 
 // New creates a Service.

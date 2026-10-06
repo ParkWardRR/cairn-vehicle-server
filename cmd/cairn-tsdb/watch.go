@@ -32,7 +32,24 @@ func (c config) fingerprint() string {
 		dirs = append(dirs, filepath.Join(c.sdRoot, "bundles"))
 	}
 
+	// The ledger is watched as well as the receipts: a bundle's path and size come from
+	// it, and its committed entry lands just after the receipt, so a rebuild that saw
+	// only the receipt would leave the bundle's path unknown until something else
+	// changed.
+	if c.dataDir != "" {
+		dirs = append(dirs, filepath.Join(c.dataDir, "ledger"))
+	}
+
 	var b strings.Builder
+	// The vehicle registry is watched for the owner's tune records. Size as well as time:
+	// two edits inside one filesystem timestamp tick would otherwise look like none.
+	if c.vehiclesFile != "" {
+		if info, err := os.Stat(c.vehiclesFile); err == nil {
+			fmt.Fprintf(&b, "vehicles:%d:%d;", info.Size(), info.ModTime().UnixNano())
+		} else {
+			b.WriteString("vehicles:none;")
+		}
+	}
 	for _, d := range dirs {
 		entries, err := os.ReadDir(d)
 		if err != nil {
@@ -40,12 +57,16 @@ func (c config) fingerprint() string {
 			continue
 		}
 		var newest time.Time
+		var size int64
 		for _, e := range entries {
-			if info, err := e.Info(); err == nil && info.ModTime().After(newest) {
-				newest = info.ModTime()
+			if info, err := e.Info(); err == nil {
+				size += info.Size()
+				if info.ModTime().After(newest) {
+					newest = info.ModTime()
+				}
 			}
 		}
-		fmt.Fprintf(&b, "%s:%d:%d;", d, len(entries), newest.UnixNano())
+		fmt.Fprintf(&b, "%s:%d:%d:%d;", d, len(entries), newest.UnixNano(), size)
 	}
 	return b.String()
 }

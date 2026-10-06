@@ -1,0 +1,17 @@
+{
+  "schema": "cairn.engine-analysis/v0",
+  "id": "bmw-b58",
+  "name": "BMW B58",
+  "status": "stub",
+  "codes": ["B58"],
+  "sources": [
+    "identity only. Nothing in the repositories documents B58 limits, and the firmware's own B58 profile (engines/bmw-b58.yaml) is a stub that claims nothing, so this one claims nothing either: no warning limits are invented from the N20"
+  ],
+  "signals": [
+    { "key": "boost_psi", "label": "Boost", "unit": "psi", "min": 0, "max": 30, "warn_low": null, "warn_high": null },
+    { "key": "lambda", "label": "Air-fuel ratio (lambda)", "unit": "", "min": 0.5, "max": 2, "warn_low": null, "warn_high": null },
+    { "key": "ltft_pct", "label": "Long-term fuel trim", "unit": "%", "min": -25, "max": 25, "warn_low": null, "warn_high": null },
+    { "key": "stft_pct", "label": "Short-term fuel trim", "unit": "%", "min": -25, "max": 25, "warn_low": null, "warn_high": null }
+  ],
+  "thresholds": {}
+}

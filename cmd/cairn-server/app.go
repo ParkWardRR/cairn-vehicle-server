@@ -11,12 +11,15 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/ParkWardRR/cairn-vehicle-server/internal/audit"
 	"github.com/ParkWardRR/cairn-vehicle-server/internal/clients"
 	"github.com/ParkWardRR/cairn-vehicle-server/internal/devices"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/engine"
 	"github.com/ParkWardRR/cairn-vehicle-server/internal/httpapi"
 	"github.com/ParkWardRR/cairn-vehicle-server/internal/intake"
 	"github.com/ParkWardRR/cairn-vehicle-server/internal/syncapi"
@@ -52,6 +55,8 @@ type appFlags struct {
 	requireIdentity bool
 	denyOther       bool
 	snapshotURL     string
+	engineDir       string
+	localTokenFile  string
 }
 
 func registerAppFlags(f *appFlags) {
@@ -75,6 +80,11 @@ func registerAppFlags(f *appFlags) {
 		"tailnet-class requests must carry an allowed Tailscale identity as well as a valid app signature")
 	flag.StringVar(&f.snapshotURL, "app-snapshot-url", "",
 		"loopback cairn-tsdb base URL for the app's authenticated /v1/snapshot (empty disables)")
+	flag.StringVar(&f.engineDir, "engine-profiles", "",
+		"directory of *.json engine analysis profiles that add to, and on an id clash replace, the built-in ones")
+	flag.StringVar(&f.localTokenFile, "app-local-token-file", "",
+		"file holding the shared secret the web layer presents to change tune records over -app-local-addr "+
+			"(64+ hex characters, not world-readable; empty leaves the local API read-only)")
 	flag.BoolVar(&f.denyOther, "app-deny-other-networks", false,
 		"refuse requests from peers in neither the LAN nor the tailnet ranges")
 }
@@ -132,6 +142,17 @@ func startApp(f appFlags, cfg runConfig, deviceReg *devices.Registry, vehicleReg
 	if f.addr != "" && !useTLS && !syncapi.IsLoopbackAddr(f.addr) {
 		return nil, errors.New("the app API is plain HTTP only on a loopback address " +
 			"(for tailscale serve); a reachable address needs -app-tls-cert and -app-tls-key")
+	}
+	engines, err := engine.Load(f.engineDir)
+	if err != nil {
+		return nil, err
+	}
+	localToken, err := readLocalToken(f.localTokenFile)
+	if err != nil {
+		return nil, err
+	}
+	if localToken != "" && f.localAddr == "" {
+		return nil, errors.New("-app-local-token-file only means something with -app-local-addr")
 	}
 	if f.requireIdentity && !f.trustServe {
 		return nil, errors.New("-require-tailnet-identity needs -trust-tailscale-serve: " +
@@ -207,7 +228,8 @@ func startApp(f appFlags, cfg runConfig, deviceReg *devices.Registry, vehicleReg
 
 	var servers []*http.Server
 	if f.localAddr != "" {
-		srv := &http.Server{Addr: f.localAddr, Handler: syncapi.LocalHandler(vehicleReg),
+		srv := &http.Server{Addr: f.localAddr, Handler: syncapi.NewLocalHandler(syncapi.LocalConfig{
+			Vehicles: vehicleReg, Engines: engines, StoreURL: f.snapshotURL, WriteToken: localToken, Log: log}),
 			ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second}
 		serve(srv, false)
 		servers = append(servers, srv)
@@ -249,6 +271,31 @@ func startApp(f appFlags, cfg runConfig, deviceReg *devices.Registry, vehicleReg
 		_ = auditLog.Close()
 		return first
 	}, nil
+}
+
+// readLocalToken loads the write token for the local API. An empty path is no token, which
+// leaves the local API read-only. A token that is short, or readable by anyone on the host,
+// is refused: it is the only thing between a local process and the owner's tune records.
+func readLocalToken(path string) (string, error) {
+	if path == "" {
+		return "", nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("local token file: %w", err)
+	}
+	if info.Mode().Perm()&0o007 != 0 {
+		return "", fmt.Errorf("local token file %s is readable by everyone; chmod 0640 or 0600", filepath.Base(path))
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("local token file: %w", err)
+	}
+	tok := strings.TrimSpace(string(raw))
+	if len(tok) < 64 {
+		return "", errors.New("local token must be at least 64 characters (openssl rand -hex 32)")
+	}
+	return tok, nil
 }
 
 // parseLeaf returns a certificate's SubjectPublicKeyInfo.

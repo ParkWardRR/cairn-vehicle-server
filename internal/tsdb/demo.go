@@ -52,7 +52,7 @@ func BuildSynthetic(ctx context.Context, fill func(Appenders) error) (*DB, error
 			return fmt.Errorf("unexpected driver connection %T", dc)
 		}
 		apps := Appenders{}
-		for _, t := range []string{"bundles", "position", "imu", "obd", "boost", "status", "transition", "gap"} {
+		for _, t := range bundleTables {
 			a, err := duckdb.NewAppenderFromConn(dconn, "", t)
 			if err != nil {
 				return fmt.Errorf("appender %s: %w", t, err)

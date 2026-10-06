@@ -1,0 +1,22 @@
+{
+  "schema": "cairn.engine-analysis/v0",
+  "id": "bmw-n20",
+  "name": "BMW N20/N26",
+  "status": "derived",
+  "codes": ["N20", "N26"],
+  "sources": [
+    "limits the web dashboard hard-coded before this profile existed (app/pages/boost.vue, app/pages/index.vue): 20 and 18 psi boost, lambda 0.9 and 1.1, long-term trim 10 and 20 percent"
+  ],
+  "signals": [
+    { "key": "boost_psi", "label": "Boost", "unit": "psi", "min": 0, "max": 30, "warn_low": null, "warn_high": 20 },
+    { "key": "lambda", "label": "Air-fuel ratio (lambda)", "unit": "", "min": 0.5, "max": 2, "warn_low": null, "warn_high": 1.1 },
+    { "key": "ltft_pct", "label": "Long-term fuel trim", "unit": "%", "min": -25, "max": 25, "warn_low": -10, "warn_high": 10, "check_low": -20, "check_high": 20 },
+    { "key": "stft_pct", "label": "Short-term fuel trim", "unit": "%", "min": -25, "max": 25, "warn_low": null, "warn_high": null }
+  ],
+  "thresholds": {
+    "pull_boost_note_psi": 18,
+    "pull_lambda_rich": 0.9,
+    "ltft_drift_watch_pct": 3,
+    "ltft_drift_check_pct": 6
+  }
+}

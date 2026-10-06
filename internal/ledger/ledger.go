@@ -80,6 +80,27 @@ type Entry struct {
 
 	Bytes int64   `json:"bytes,omitempty"`
 	Chunk *uint32 `json:"chunk,omitempty"`
+
+	// Path is how the bundle reached the server: one of the Path constants. Stamped on
+	// the entries of a bundle's upload (offered, committed, ...) by the listener that
+	// carried it. An entry written before paths were recorded has none, and a reader
+	// must treat that as unknown, never as any particular path.
+	Path string `json:"path,omitempty"`
+}
+
+// The paths a bundle can arrive by, as the store reports them (store/v1 bundles.path).
+const (
+	// PathBLERelay is the enrolled phone relaying the dongle's bundle over the app API.
+	PathBLERelay = "ble-relay"
+	// PathWiFiDirect is the dongle uploading over Wi-Fi to the device listener.
+	PathWiFiDirect = "wifi-direct"
+	// PathLTE is the dongle uploading over its own cellular link.
+	PathLTE = "lte"
+)
+
+// ValidPath reports whether p is one of the Path constants.
+func ValidPath(p string) bool {
+	return p == PathBLERelay || p == PathWiFiDirect || p == PathLTE
 }
 
 // Ledger appends entries to a daily file.

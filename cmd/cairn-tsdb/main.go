@@ -39,6 +39,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -50,10 +51,15 @@ import (
 	"github.com/ParkWardRR/cairn-vehicle-server/internal/keystore"
 	"github.com/ParkWardRR/cairn-vehicle-server/internal/mtls"
 	"github.com/ParkWardRR/cairn-vehicle-server/internal/tsdb"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/vehicles"
 )
 
 type config struct {
 	dataDir, sdRoot, scratch, memory string
+
+	// vehiclesFile is cairn-server's vehicle registry, read (never written) for the
+	// owner's tune records. Empty means the store holds none.
+	vehiclesFile string
 
 	// keys decrypts bundles. Built from -keystore and -keystore-master.
 	keys format.KeyProvider
@@ -77,6 +83,8 @@ func main() {
 	flag.StringVar(&cfg.sdRoot, "sd", "", "SD card cairn/ directory (sealed v2 bundles); optional")
 	flag.StringVar(&cfg.scratch, "scratch", "", "parent directory for the throwaway CAS (default: system temp)")
 	flag.StringVar(&cfg.memory, "memory", "2GB", "DuckDB memory ceiling")
+	flag.StringVar(&cfg.vehiclesFile, "vehicles", "",
+		"cairn-server's vehicles.json, read for tune records (default: <data>/vehicles.json when -data is set and it exists)")
 	keystorePath := flag.String("keystore", "", "escrowed storage-root file (required: bundles are encrypted)")
 	keystoreMaster := flag.String("keystore-master", "", "keystore master key file (required with -keystore)")
 	flag.Parse()
@@ -93,6 +101,12 @@ func main() {
 	cfg.keys = ks.Provider()
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+
+	if cfg.vehiclesFile == "" && cfg.dataDir != "" {
+		if def := filepath.Join(cfg.dataDir, "vehicles.json"); fileExists(def) {
+			cfg.vehiclesFile = def
+		}
+	}
 
 	if cfg.dataDir == "" && cfg.sdRoot == "" {
 		fmt.Fprintln(os.Stderr, "cairn-tsdb: give at least one of -data and -sd")
@@ -227,7 +241,34 @@ func build(ctx context.Context, cfg config) (*tsdb.DB, error) {
 	// the database holds its own copy, so the scratch CAS can go.
 	defer snap.Close()
 
-	return tsdb.Build(ctx, snap, notes, tsdb.Options{MemoryLimit: cfg.memory, Keys: cfg.keys})
+	tunes, err := loadTunes(cfg.vehiclesFile)
+	if err != nil {
+		// Tune records are the owner's notes. A registry that cannot be read costs the
+		// before and after comparison, not the trips.
+		notes = append(notes, fmt.Sprintf("tune records not loaded: %v", err))
+	}
+
+	return tsdb.Build(ctx, snap, notes, tsdb.Options{MemoryLimit: cfg.memory, Keys: cfg.keys, Tunes: tunes})
+}
+
+func loadTunes(path string) ([]tsdb.TuneRow, error) {
+	if path == "" {
+		return nil, nil
+	}
+	recs, err := vehicles.ReadTunes(path)
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]tsdb.TuneRow, 0, len(recs))
+	for _, t := range recs {
+		rows = append(rows, tsdb.TuneRow{VehicleID: t.VehicleID, TuneID: t.ID, At: t.Time(), Note: t.Note})
+	}
+	return rows, nil
+}
+
+func fileExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }
 
 type server struct {

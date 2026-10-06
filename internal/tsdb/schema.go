@@ -36,7 +36,14 @@ CREATE TABLE bundles (
     n_transition   UINTEGER,
     n_gap          UINTEGER,
     unknown_records INTEGER,
-    warnings       VARCHAR
+    warnings       VARCHAR,
+    -- How the bundle reached the server, from the server's own lifecycle ledger. All four
+    -- are NULL for a bundle the ledger has no record of (one read off the SD card, say):
+    -- an unknown path is not any of the three.
+    path           VARCHAR,       -- ble-relay | wifi-direct | lte
+    size_bytes     UBIGINT,       -- bytes stored on commit
+    duration_ms    UINTEGER,      -- first offer to commit, a session's pauses included
+    received_at    TIMESTAMP      -- when the server committed it
 );
 
 CREATE TABLE position (
@@ -110,7 +117,20 @@ CREATE TABLE gap (
     started_at   TIMESTAMP, duration_ms UINTEGER,
     expected_samples USMALLINT, cause UTINYINT
 );
+
+-- The owner's tune records, copied from the vehicle registry when the store is built (the
+-- registry is the one place they are written). tuned_at is the start of the tune's day,
+-- UTC. A store with no tune records simply has no rows here.
+CREATE TABLE tune (
+    vehicle_id VARCHAR NOT NULL,
+    tune_id    VARCHAR NOT NULL,
+    tuned_at   TIMESTAMP NOT NULL,
+    note       VARCHAR
+);
 `
+
+// bundleTables are every table the loader fills, in the order the appenders are opened.
+var bundleTables = []string{"bundles", "position", "imu", "obd", "boost", "status", "transition", "gap", "tune"}
 
 // sampleTables are the tables physically ordered by (vehicle_id, boot_id,
 // mono_ms) once a load finishes. Sorting is what lets DuckDB's min/max zone
@@ -428,4 +448,95 @@ WHERE coalesce(i.source_flags, 0) & 32 = 0
   AND i.fix_type > 0
   AND p.fix_type > 0
   AND ABS(i.mono_ms - p.mono_ms) < 500;
+
+-- When each boot began, as far as the store can tell: its first sample that carries a UTC
+-- estimate. A boot with none has no place on a calendar and takes no part in a comparison
+-- over time.
+CREATE VIEW v_boot_start AS
+SELECT vehicle_id, boot_id, min(observed_at) AS started_at
+FROM (SELECT vehicle_id, boot_id, observed_at FROM boost
+      UNION ALL SELECT vehicle_id, boot_id, observed_at FROM obd) AS s
+WHERE observed_at IS NOT NULL
+GROUP BY vehicle_id, boot_id;
+
+-- One observation per row for the four numbers the owner compares across a tune, each
+-- stamped with when its boot began. The unit of observation differs on purpose:
+--   boost_psi, lambda  one per wide-open-throttle pull (v_pulls): its peak boost and its
+--                      mean lambda. Idle and cruise readings say nothing about a tune.
+--   ltft_pct, stft_pct one per boot: the median trim over the boot, kept only when the boot
+--                      holds at least 20 readings, so one long drive does not outweigh ten
+--                      short ones and a drive that barely started counts for nothing.
+-- metric is the engine profile's signal key.
+CREATE VIEW v_metric_samples AS
+SELECT p.vehicle_id, p.boot_id, 'boost_psi' AS metric, p.peak_boost_psi AS value, s.started_at
+FROM v_pulls p JOIN v_boot_start s ON s.vehicle_id = p.vehicle_id AND s.boot_id = p.boot_id
+WHERE p.peak_boost_psi IS NOT NULL
+UNION ALL
+SELECT p.vehicle_id, p.boot_id, 'lambda', p.avg_lambda, s.started_at
+FROM v_pulls p JOIN v_boot_start s ON s.vehicle_id = p.vehicle_id AND s.boot_id = p.boot_id
+WHERE p.avg_lambda IS NOT NULL
+UNION ALL
+SELECT b.vehicle_id, b.boot_id, 'ltft_pct', median(b.ltft_pct), s.started_at
+FROM boost b JOIN v_boot_start s ON s.vehicle_id = b.vehicle_id AND s.boot_id = b.boot_id
+WHERE b.ltft_pct IS NOT NULL
+GROUP BY b.vehicle_id, b.boot_id, s.started_at
+HAVING count(*) >= 20
+UNION ALL
+SELECT b.vehicle_id, b.boot_id, 'stft_pct', median(b.stft_pct), s.started_at
+FROM boost b JOIN v_boot_start s ON s.vehicle_id = b.vehicle_id AND s.boot_id = b.boot_id
+WHERE b.stft_pct IS NOT NULL
+GROUP BY b.vehicle_id, b.boot_id, s.started_at
+HAVING count(*) >= 20;
+
+-- Before and after, per tune and metric. "Before" is the stretch under the previous tune
+-- (from that tune's day up to this one, or from the start of the data for the first tune)
+-- and "after" is the stretch under this one (up to the next tune, or to the end). A median
+-- over everything before would mix two earlier tunes into one baseline. Every tune gets one
+-- row per metric, with NULL medians and zero counts where the data is not there yet, so a
+-- reader never has to tell "no row" from "no data".
+CREATE VIEW v_tune_effect AS
+WITH tw AS (
+    SELECT vehicle_id, tune_id, tuned_at,
+           coalesce(lag(tuned_at) OVER w, TIMESTAMP '1970-01-01') AS window_from,
+           coalesce(lead(tuned_at) OVER w, TIMESTAMP '9999-12-31') AS window_to
+    FROM tune
+    WINDOW w AS (PARTITION BY vehicle_id ORDER BY tuned_at, tune_id)
+)
+SELECT t.vehicle_id, t.tune_id, m.metric,
+       median(s.value) FILTER (WHERE s.started_at >= t.window_from AND s.started_at < t.tuned_at) AS before_median,
+       median(s.value) FILTER (WHERE s.started_at >= t.tuned_at AND s.started_at < t.window_to)   AS after_median,
+       count(*) FILTER (WHERE s.started_at >= t.window_from AND s.started_at < t.tuned_at)        AS before_n,
+       count(*) FILTER (WHERE s.started_at >= t.tuned_at AND s.started_at < t.window_to)          AS after_n
+FROM tw t
+CROSS JOIN (VALUES ('boost_psi'), ('lambda'), ('ltft_pct'), ('stft_pct')) AS m(metric)
+LEFT JOIN v_metric_samples s ON s.vehicle_id = t.vehicle_id AND s.metric = m.metric
+GROUP BY t.vehicle_id, t.tune_id, m.metric;
+
+-- The raw statistics behind the health summary: the last 14 days of a car's data against
+-- the stretch before them. "Last" is relative to the car's most recent observation, not to
+-- the clock, so a car that has sat for a month is described by the drives it last made
+-- rather than by an empty fortnight. The baseline starts at the latest tune: a tune moves
+-- fuel trim on purpose, and comparing against the car before it would report the tune as
+-- a fault. cairn-server turns these into sentences, because the limits that make a number
+-- "normal" belong to the engine profile and not to the store.
+CREATE VIEW v_health_stats AS
+WITH last AS (
+    SELECT vehicle_id, max(started_at) AS last_at FROM v_metric_samples GROUP BY vehicle_id
+),
+cur AS (
+    SELECT vehicle_id, max(tuned_at) AS tuned_at FROM tune GROUP BY vehicle_id
+)
+SELECT s.vehicle_id, s.metric,
+       median(s.value) FILTER (WHERE s.started_at > l.last_at - INTERVAL 14 DAY) AS recent_median,
+       count(*) FILTER (WHERE s.started_at > l.last_at - INTERVAL 14 DAY)        AS recent_n,
+       median(s.value) FILTER (WHERE s.started_at <= l.last_at - INTERVAL 14 DAY
+                                 AND s.started_at >= coalesce(c.tuned_at, TIMESTAMP '1970-01-01')) AS baseline_median,
+       count(*) FILTER (WHERE s.started_at <= l.last_at - INTERVAL 14 DAY
+                          AND s.started_at >= coalesce(c.tuned_at, TIMESTAMP '1970-01-01'))        AS baseline_n,
+       l.last_at AS last_observed_at,
+       c.tuned_at AS tuned_at
+FROM v_metric_samples s
+JOIN last l ON l.vehicle_id = s.vehicle_id
+LEFT JOIN cur c ON c.vehicle_id = s.vehicle_id
+GROUP BY s.vehicle_id, s.metric, l.last_at, c.tuned_at;
 `

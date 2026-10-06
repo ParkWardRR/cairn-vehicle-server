@@ -33,7 +33,10 @@ type Ref struct {
 type Snapshot struct {
 	Store *cas.Store
 	Refs  []Ref
-	dir   string
+	// Meta is what the server's ledger says about how each bundle arrived, keyed by hex
+	// content root. A bundle with no entry here has no recorded path.
+	Meta map[string]BundleMeta
+	dir  string
 }
 
 // Close removes the scratch store.
@@ -60,7 +63,7 @@ func SnapshotSources(scratchParent, dataDir, sdRoot string) (*Snapshot, []string
 		os.RemoveAll(dir)
 		return nil, nil, err
 	}
-	snap := &Snapshot{Store: store, dir: dir}
+	snap := &Snapshot{Store: store, dir: dir, Meta: map[string]BundleMeta{}}
 
 	var notes []string
 	seen := map[[32]byte]bool{}
@@ -84,6 +87,14 @@ func SnapshotSources(scratchParent, dataDir, sdRoot string) (*Snapshot, []string
 		for _, r := range refs {
 			add(r)
 		}
+		meta, n, err := ledgerMeta(filepath.Join(dataDir, "ledger"))
+		notes = append(notes, n...)
+		if err != nil {
+			// The path columns are an annotation. A damaged ledger must not stop the
+			// store from loading the data the receipts prove exists.
+			notes = append(notes, fmt.Sprintf("ledger: %v; bundle paths are unknown", err))
+		}
+		snap.Meta = meta
 	}
 	if sdRoot != "" {
 		refs, n, err := snapshotSD(store, sdRoot)

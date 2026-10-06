@@ -46,6 +46,27 @@ type Options struct {
 	// Keys decrypts bundle segments (v3). Required: the store is built by
 	// decoding, and an encrypted segment cannot be decoded without its key.
 	Keys format.KeyProvider
+
+	// Tunes are the owner's tune records, loaded into the tune table. Optional.
+	Tunes []TuneRow
+}
+
+// TuneRow is one tune record as the store holds it. The vehicle registry is where tunes
+// are written; the store only carries a copy so the before and after views can be
+// computed beside the data.
+type TuneRow struct {
+	VehicleID string
+	TuneID    string
+	At        time.Time // 00:00 UTC of the tune's day
+	Note      string
+}
+
+// BundleMeta is what the server's lifecycle ledger knows about how one bundle arrived.
+type BundleMeta struct {
+	Path       string // ledger.PathBLERelay and friends; empty when unrecorded
+	SizeBytes  uint64
+	DurationMS uint32
+	ReceivedAt time.Time
 }
 
 // DB is a built, locked, queryable store.
@@ -131,7 +152,7 @@ func Build(ctx context.Context, snap *Snapshot, notes []string, opts Options) (*
 
 	report := Report{BuiltAt: started.UTC(), DecoderVer: decode.Version, Notes: notes}
 
-	loaded, err := loadAll(ctx, sdb, snap, &report, opts.Keys)
+	loaded, err := loadAll(ctx, sdb, snap, &report, opts.Keys, opts.Tunes)
 	if err != nil {
 		return fail(err)
 	}
@@ -185,7 +206,7 @@ type expected struct {
 	counts Counts
 }
 
-func loadAll(ctx context.Context, sdb *sql.DB, snap *Snapshot, report *Report, keys format.KeyProvider) ([]expected, error) {
+func loadAll(ctx context.Context, sdb *sql.DB, snap *Snapshot, report *Report, keys format.KeyProvider, tunes []TuneRow) ([]expected, error) {
 	conn, err := sdb.Conn(ctx)
 	if err != nil {
 		return nil, err
@@ -200,7 +221,7 @@ func loadAll(ctx context.Context, sdb *sql.DB, snap *Snapshot, report *Report, k
 		}
 
 		apps := map[string]*duckdb.Appender{}
-		for _, t := range []string{"bundles", "position", "imu", "obd", "boost", "status", "transition", "gap"} {
+		for _, t := range bundleTables {
 			a, err := duckdb.NewAppenderFromConn(dconn, "", t)
 			if err != nil {
 				return fmt.Errorf("appender %s: %w", t, err)
@@ -229,7 +250,11 @@ func loadAll(ctx context.Context, sdb *sql.DB, snap *Snapshot, report *Report, k
 					"bundle %x (%s): second decode did not reproduce the first", ref.ContentRoot[:6], ref.Origin))
 			}
 
-			exp, err := appendResult(apps, ref, res, hex.EncodeToString(digest[:]), reproduced)
+			var meta *BundleMeta
+			if m, ok := snap.Meta[hex.EncodeToString(res.ContentRoot[:])]; ok {
+				meta = &m
+			}
+			exp, err := appendResult(apps, ref, res, hex.EncodeToString(digest[:]), reproduced, meta)
 			if err != nil {
 				return fmt.Errorf("bundle %x: %w", ref.ContentRoot[:6], err)
 			}
@@ -245,6 +270,12 @@ func loadAll(ctx context.Context, sdb *sql.DB, snap *Snapshot, report *Report, k
 			})
 		}
 
+		for _, t := range tunes {
+			if err := apps["tune"].AppendRow(t.VehicleID, t.TuneID, t.At, t.Note); err != nil {
+				return fmt.Errorf("tune %s: %w", t.TuneID, err)
+			}
+		}
+
 		for t, a := range apps {
 			if err := a.Close(); err != nil {
 				return fmt.Errorf("flush %s: %w", t, err)
@@ -253,6 +284,37 @@ func loadAll(ctx context.Context, sdb *sql.DB, snap *Snapshot, report *Report, k
 		return nil
 	})
 	return out, err
+}
+
+// The ledger may know nothing about a bundle (one that came off the SD card, or that
+// arrived before paths were recorded). Each of these then yields NULL, never a zero that
+// reads as a path, a size or a time.
+func metaPath(m *BundleMeta) driver.Value {
+	if m == nil || m.Path == "" {
+		return nil
+	}
+	return m.Path
+}
+
+func metaSize(m *BundleMeta) driver.Value {
+	if m == nil {
+		return nil
+	}
+	return m.SizeBytes
+}
+
+func metaDuration(m *BundleMeta) driver.Value {
+	if m == nil || m.ReceivedAt.IsZero() {
+		return nil
+	}
+	return m.DurationMS
+}
+
+func metaReceived(m *BundleMeta) driver.Value {
+	if m == nil || m.ReceivedAt.IsZero() {
+		return nil
+	}
+	return m.ReceivedAt
 }
 
 // opt dereferences a decoder's optional value. A nil pointer is the decoder
@@ -265,7 +327,7 @@ func opt[T any](p *T) driver.Value {
 	return *p
 }
 
-func appendResult(apps map[string]*duckdb.Appender, ref Ref, res *decode.Result, digest string, reproduced bool) (expected, error) {
+func appendResult(apps map[string]*duckdb.Appender, ref Ref, res *decode.Result, digest string, reproduced bool, meta *BundleMeta) (expected, error) {
 	root := hex.EncodeToString(res.ContentRoot[:])
 	boot := hex.EncodeToString(res.BootID[:])
 	// Each row is written with its own vehicle rather than the bundle's, so the
@@ -293,7 +355,8 @@ func appendResult(apps map[string]*duckdb.Appender, ref Ref, res *decode.Result,
 	if err := row("bundles", root, veh(res.VehicleID), hex.EncodeToString(res.BundleID[:]), hex.EncodeToString(res.DeviceID[:]),
 		boot, ref.Origin, int32(decode.Version), digest, reproduced, int32(res.DurationMS),
 		c.Position, c.IMU, c.OBD, c.Boost, c.Status, c.Transition, c.Gap,
-		int32(res.UnknownRecords), strings.Join(res.Warnings, "; ")); err != nil {
+		int32(res.UnknownRecords), strings.Join(res.Warnings, "; "),
+		metaPath(meta), metaSize(meta), metaDuration(meta), metaReceived(meta)); err != nil {
 		return expected{}, err
 	}
 

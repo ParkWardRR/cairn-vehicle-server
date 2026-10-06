@@ -86,8 +86,20 @@ type Vehicle struct {
 	VINCiphertext string `json:"vin_ciphertext,omitempty"`
 	VINLast4      string `json:"vin_last4,omitempty"`
 
+	// Tunes is the car's tune history, oldest first by date. It is what lets the
+	// store say how boost and fuel trim moved before and after a change.
+	Tunes []Tune `json:"tunes,omitempty"`
+
 	CreatedAt  time.Time `json:"created_at"`
 	ArchivedAt time.Time `json:"archived_at,omitzero"`
+}
+
+// clone copies the vehicle and what it holds, so a caller cannot edit the registry
+// through a returned value.
+func (v *Vehicle) clone() *Vehicle {
+	c := *v
+	c.Tunes = append([]Tune(nil), v.Tunes...)
+	return &c
 }
 
 // Archived reports whether the vehicle has been retired.
@@ -263,8 +275,7 @@ func (r *Registry) CreateVehicle(spec NewVehicleSpec) (*Vehicle, error) {
 	if err != nil {
 		return nil, err
 	}
-	copied := *v
-	return &copied, nil
+	return v.clone(), nil
 }
 
 // Vehicle returns one vehicle.
@@ -273,8 +284,7 @@ func (r *Registry) Vehicle(id string) (*Vehicle, error) {
 	r.store.View(func(d *document) {
 		for _, v := range d.Vehicles {
 			if strings.EqualFold(v.ID, id) {
-				c := *v
-				out = &c
+				out = v.clone()
 				return
 			}
 		}
@@ -290,8 +300,7 @@ func (r *Registry) Vehicles() []*Vehicle {
 	var out []*Vehicle
 	r.store.View(func(d *document) {
 		for _, v := range d.Vehicles {
-			c := *v
-			out = append(out, &c)
+			out = append(out, v.clone())
 		}
 	})
 	sort.SliceStable(out, func(i, j int) bool {

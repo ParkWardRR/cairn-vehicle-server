@@ -17,10 +17,14 @@ import (
 // at deploy time instead of failing in a browser. TestStoreContractMatchesSchema ties
 // the string to the schema this package actually builds: change the schema and that
 // test fails until the minor and schemaFingerprint are updated together.
-const StoreContract = "store/v1.0"
+//
+// store/v1.1 adds, all additive: the bundles columns path, size_bytes, duration_ms and
+// received_at; the tune table; and the views v_boot_start, v_metric_samples, v_tune_effect
+// and v_health_stats.
+const StoreContract = "store/v1.1"
 
 // schemaFingerprint is the fingerprint of the schema StoreContract describes.
-const schemaFingerprint = "e3aa9bbf2517021f280e0901b2d8c25126c392c8a107726673d762019ad0a190"
+const schemaFingerprint = "b7e0e527a7c3f9067b7e94b1c2426ac01a36a9c2e1b543aef53e90286992760c"
 
 // Capabilities is what a running store offers: the objects present in its database.
 type Capabilities struct {

@@ -216,7 +216,8 @@ func generate(apps tsdb.Appenders, routes map[string]route, rng *rand.Rand, verb
 		c := info.counts
 		if err := apps.Append("bundles", info.root, demoVehicleID, info.bundleID, deviceID, info.bootID, info.origin,
 			int32(1), hexOf("digest", info.root), true, int32(3+rng.IntN(9)),
-			c.pos, c.imu, c.obd, c.boost, c.status, c.trans, c.gap, int32(0), ""); err != nil {
+			c.pos, c.imu, c.obd, c.boost, c.status, c.trans, c.gap, int32(0), "",
+			nil, nil, nil, nil); err != nil {
 			return err
 		}
 	}
