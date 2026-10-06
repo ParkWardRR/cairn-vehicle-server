@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Deploy the v3 server stack to the Cairn host.
 #
-#   deploy/deploy-v3.sh <user@host> [--reset-v2-data]
+#   deploy/deploy-v3.sh <user@host> [--reset-v2-data] [--build-only]
+#
+# --build-only syncs and builds on the host, then stops: nothing is installed and
+# nothing is restarted, so it is safe to run against a host that is serving.
 #
 # Builds ON the host (cairn-tsdb links DuckDB through cgo, which does not cross-
 # compile from a Mac), from a source rsync rather than a git pull, so it deploys
@@ -9,7 +12,7 @@
 # names in this file: pass them on the command line.
 #
 # What it does, in order, stopping at the first failure:
-#   1. rsync server/ and deploy/ to ~/cairn-v3 on the host
+#   1. rsync this repository (and deploy/) to ~/cairn-v3 on the host
 #   2. build with nice and -p 4 (the host is shared with the runner and the
 #      database; an uncapped build has wedged it before)
 #   3. install the binaries, keeping the previous ones as <name>.prev
@@ -22,8 +25,16 @@
 #   7. restart and wait for health
 set -euo pipefail
 
-HOST="${1:?usage: deploy-v3.sh <user@host> [--reset-v2-data]}"
-RESET=0; [ "${2:-}" = "--reset-v2-data" ] && RESET=1
+HOST="${1:?usage: deploy-v3.sh <user@host> [--reset-v2-data] [--build-only]}"
+shift
+RESET=0; BUILD_ONLY=0
+for a in "$@"; do
+  case "$a" in
+    --reset-v2-data) RESET=1 ;;
+    --build-only) BUILD_ONLY=1 ;;
+    *) echo "unknown option: $a" >&2; exit 2 ;;
+  esac
+done
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DATA=/var/lib/cairn
 BINS="cairn-server cairn-admin cairn-verify cairn-ledger cairn-signfw"
@@ -31,11 +42,17 @@ BINS="cairn-server cairn-admin cairn-verify cairn-ledger cairn-signfw"
 echo "==> syncing source"
 ssh "$HOST" "mkdir -p ~/cairn-v3/server ~/cairn-v3/deploy"
 rsync -az --delete --exclude node_modules --exclude .git --exclude 'bin/' \
-  "$ROOT/server/" "$HOST:cairn-v3/server/"
+  --exclude deploy --exclude .contracts \
+  "$ROOT/" "$HOST:cairn-v3/server/"
 rsync -az --delete "$ROOT/deploy/" "$HOST:cairn-v3/deploy/"
 
 echo "==> building on the host (nice, -p 4)"
 ssh "$HOST" 'cd ~/cairn-v3/server && nice -n 10 make build BINDIR=bin GOFLAGS="-p=4" && nice -n 10 make build-tsdb BINDIR=bin GOFLAGS="-p=4"'
+
+if [ "$BUILD_ONLY" = 1 ]; then
+  echo "==> built; --build-only, so nothing was installed or restarted"
+  exit 0
+fi
 
 echo "==> installing binaries"
 ssh "$HOST" "cd ~/cairn-v3/server/bin && for b in $BINS cairn-tsdb; do
