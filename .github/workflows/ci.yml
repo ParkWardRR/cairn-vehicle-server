@@ -71,6 +71,19 @@ jobs:
             exit 1
           }
 
+      # The sync/v1 exchange vectors (signed push/pull, vehicle scoping, the bundle relay,
+      # and the negatives): this server must answer every recorded request as recorded,
+      # and regenerating must reproduce the pinned file. Until a contracts release that
+      # contains them is pinned, the test skips; `go test` hides a skip, so say so here
+      # instead of letting a green check imply they were run.
+      - name: Sync exchange vectors against the pinned contracts
+        run: |
+          out="$(go test ./internal/syncapi -run SyncExchange -count=1 -v 2>&1)" || { echo "$out"; exit 1; }
+          echo "$out"
+          if echo "$out" | grep -q -- '--- SKIP'; then
+            echo "::warning title=sync/v1 exchange vectors NOT CHECKED::The pinned contracts release has no sync/v1 exchanges.json. The owner must tag a contracts release containing it and bump contracts.lock."
+          fi
+
   # The decode pipeline, against a real PostgreSQL + PostGIS: partitioning, geography
   # columns, generated columns and ON CONFLICT behaviour are what a fake would get
   # wrong while reporting success. The database runs INSIDE the job
