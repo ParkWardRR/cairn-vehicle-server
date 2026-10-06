@@ -44,22 +44,17 @@ import (
 //   - the server's relay, over HTTP with real per-request signatures and the real
 //     intake service.
 //
-// Only the BLE link itself is simulated. Build the simulator first:
-//
-//	make -C firmware/cairn-v2/test/host offload-sim
-//
-// or point CAIRN_OFFLOAD_SIM at it. The tests skip, loudly, if it is absent.
+// Only the BLE link itself is simulated. The simulator is built from the firmware
+// repository (`make -C test/host offload-sim` there): point CAIRN_OFFLOAD_SIM at
+// the binary. The tests skip, loudly, if it is not set.
 
 func simPath(t *testing.T) string {
 	t.Helper()
 	if p := os.Getenv("CAIRN_OFFLOAD_SIM"); p != "" {
 		return p
 	}
-	p, _ := filepath.Abs("../../../firmware/cairn-v2/test/host/build/offload-sim")
-	if _, err := os.Stat(p); err != nil {
-		t.Skipf("offload-sim is not built (%v): run `make -C firmware/cairn-v2/test/host offload-sim`", err)
-	}
-	return p
+	t.Skip("CAIRN_OFFLOAD_SIM is not set: build the firmware repository's `make -C test/host offload-sim` and point it at the binary")
+	return ""
 }
 
 // ─── the server ─────────────────────────────────────────────────────────────
