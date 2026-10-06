@@ -85,10 +85,25 @@ type Config struct {
 	// AckPath is where client acknowledgements are kept.
 	AckPath string
 
+	// MaxOffersPerClient bounds how many bundle offers one client may have
+	// outstanding on the relay: offered and not yet committed. Zero means
+	// DefaultMaxOffersPerClient; a negative value disables the limit. Beyond it
+	// the relay answers 429 too_many_offers until the client commits one.
+	// Re-offering a bundle the client already has outstanding, or one that is
+	// already receipted, never counts. The count lives in memory, so a restart
+	// starts every client at zero.
+	MaxOffersPerClient int
+
 	Limiter *httpapi.Limiter
 	Log     *slog.Logger
 	Now     func() time.Time
 }
+
+// DefaultMaxOffersPerClient is the relay's per-client cap on outstanding offers
+// when Config.MaxOffersPerClient is zero. A phone moves a bundle at a time, so
+// this is generous for a backlog of a few trips while still bounding the offer
+// records and verified manifests one client can make the server hold.
+const DefaultMaxOffersPerClient = 32
 
 // Server is the app-facing API.
 type Server struct {
@@ -100,6 +115,9 @@ type Server struct {
 	mu     sync.Mutex
 	nonces map[string]time.Time // client|nonce -> expiry
 	tokens map[string]token     // sha256(token) hex -> token
+
+	offerMu sync.Mutex
+	offers  map[string]*clientOffers // client id -> its outstanding relay offers (relay.go)
 }
 
 type token struct {
@@ -131,7 +149,8 @@ func New(cfg Config) (*Server, error) {
 	s := &Server{
 		cfg: cfg, acks: acks,
 		nonces: map[string]time.Time{}, tokens: map[string]token{},
-		log: cfg.Log, now: cfg.Now,
+		offers: map[string]*clientOffers{},
+		log:    cfg.Log, now: cfg.Now,
 	}
 	if s.log == nil {
 		s.log = slog.Default()

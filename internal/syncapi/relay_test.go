@@ -32,7 +32,7 @@ type relayEnv struct {
 // newRelayEnv builds the app API with the relay enabled over a real intake
 // service: real registries, a real CAS and a real receipt signer. The relay adds
 // no trust decisions of its own, so a stub would prove nothing.
-func newRelayEnv(t *testing.T) *relayEnv {
+func newRelayEnv(t *testing.T, mods ...func(*Config)) *relayEnv {
 	t.Helper()
 	root := t.TempDir()
 
@@ -71,7 +71,7 @@ func newRelayEnv(t *testing.T) *relayEnv {
 	}
 
 	v := testbundle.VehicleID()
-	e := newEnv(t, func(c *Config) { c.Intake = svc })
+	e := newEnv(t, append([]func(*Config){func(c *Config) { c.Intake = svc }}, mods...)...)
 	return &relayEnv{env: e, intake: svc, receipts: rec, cas: store, vehicle: hex.EncodeToString(v[:])}
 }
 
