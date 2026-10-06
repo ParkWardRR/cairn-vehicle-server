@@ -27,6 +27,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/buildinfo"
 	"github.com/ParkWardRR/cairn-vehicle-server/internal/tsdb"
 )
 
@@ -98,7 +99,19 @@ func main() {
 	defer db.Close()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprintln(w, "ok") })
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"status": "ok", "build": buildinfo.Get(), "store_contract": tsdb.StoreContract})
+	})
+	mux.HandleFunc("GET /capabilities", func(w http.ResponseWriter, r *http.Request) {
+		caps, err := db.Capabilities(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"build": buildinfo.Get(), "store": caps})
+	})
 	mux.HandleFunc("POST /query", func(w http.ResponseWriter, r *http.Request) {
 		buf := make([]byte, 64<<10)
 		n, _ := r.Body.Read(buf)

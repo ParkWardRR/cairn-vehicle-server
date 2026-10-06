@@ -36,7 +36,13 @@
 
 GO      ?= go
 BINDIR  ?= bin
-LDFLAGS ?= -s -w
+
+# The build identity reported by /healthz (internal/buildinfo). Without a git checkout
+# the binary still reports whatever the Go toolchain stamped into it.
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null)
+COMMIT  ?= $(shell git rev-parse HEAD 2>/dev/null)
+BUILDINFO := -X github.com/ParkWardRR/cairn-vehicle-server/internal/buildinfo.Version=$(VERSION) -X github.com/ParkWardRR/cairn-vehicle-server/internal/buildinfo.Commit=$(COMMIT)
+LDFLAGS ?= -s -w $(BUILDINFO)
 
 UNAME_S := $(shell uname -s)
 UNAME_M := $(shell uname -m)

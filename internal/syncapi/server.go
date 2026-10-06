@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/ParkWardRR/cairn-vehicle-server/internal/audit"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/buildinfo"
 	"github.com/ParkWardRR/cairn-vehicle-server/internal/clients"
 	"github.com/ParkWardRR/cairn-vehicle-server/internal/devices"
 	"github.com/ParkWardRR/cairn-vehicle-server/internal/httpapi"
@@ -480,6 +481,7 @@ func (s *Server) handleHealth(q *request) (int, string) {
 		"protocol_version": ProtocolVersion,
 		"instance_id":      s.cfg.InstanceID,
 		"server_time":      s.now().Format(time.RFC3339),
+		"build":            buildinfo.Get(),
 	})
 	return http.StatusOK, ""
 }
