@@ -539,4 +539,45 @@ FROM v_metric_samples s
 JOIN last l ON l.vehicle_id = s.vehicle_id
 LEFT JOIN cur c ON c.vehicle_id = s.vehicle_id
 GROUP BY s.vehicle_id, s.metric, l.last_at, c.tuned_at;
+
+-- One row per trip with the calendar period it belongs to, for a caller that groups
+-- or filters by year, quarter, month or week itself. A trip belongs to the period
+-- (UTC calendar day, ISO week starting Monday) of its started_at, the first thing
+-- observed on any source, and all of it counts there, including the part after a
+-- midnight, month or year boundary: a drive is not split. observed_at is a
+-- timezone-less UTC estimate, so no session TimeZone setting moves a trip across
+-- a boundary. A trip with no wall-clock time at all (started_at NULL) belongs to
+-- no period and is not listed. Distance, duration and the speed maxima are
+-- v_trip_summary's own, not recomputed.
+CREATE VIEW v_trip_period AS
+SELECT vehicle_id, boot_id, started_at, ended_at,
+       CAST(started_at AS DATE) AS started_on,
+       CAST(date_trunc('week', started_at) AS DATE) AS week_start,
+       CAST(date_trunc('month', started_at) AS DATE) AS month_start,
+       CAST(date_trunc('quarter', started_at) AS DATE) AS quarter_start,
+       CAST(date_trunc('year', started_at) AS DATE) AS year_start,
+       duration_ms, distance_m,
+       max_obd_speed_kph,
+       max_gnss_speed_mps * 3.6 AS max_gnss_speed_kph
+FROM v_trip_summary
+WHERE started_at IS NOT NULL;
+
+-- A view cannot take a parameter, so the period summary for any date range is a
+-- table macro: SELECT * FROM period_summary('2026-03-01', '2026-04-01'). The range
+-- is [from_day, to_day): from_day is included and to_day is the first day after,
+-- so adjacent ranges (a month, the next month) neither overlap nor leave a gap; a
+-- custom "1 to 10 March" is ('2026-03-01', '2026-03-11'). One row per vehicle that
+-- has a trip in the range; a vehicle with none has no row, which a consumer reads
+-- as zero. max_obd_speed_kph is v_drive_summary's max_speed_kph. Group a year,
+-- quarter, month or week by selecting v_trip_period on its *_start column instead.
+CREATE MACRO period_summary(from_day, to_day) AS TABLE
+SELECT vehicle_id,
+       count(*) AS trips,
+       CAST(coalesce(sum(duration_ms), 0) AS BIGINT) AS duration_ms,
+       coalesce(sum(distance_m), 0) AS distance_m,
+       max(max_obd_speed_kph) AS max_obd_speed_kph,
+       max(max_gnss_speed_kph) AS max_gnss_speed_kph
+FROM v_trip_period
+WHERE started_at >= CAST(from_day AS TIMESTAMP) AND started_at < CAST(to_day AS TIMESTAMP)
+GROUP BY vehicle_id;
 `
