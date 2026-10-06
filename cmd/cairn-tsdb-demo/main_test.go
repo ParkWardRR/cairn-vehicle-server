@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"regexp"
 	"testing"
@@ -45,6 +46,8 @@ func scalar(t *testing.T, db *tsdb.DB, q string) float64 {
 	switch v := res.Rows[0][0].(type) {
 	case int64:
 		return float64(v)
+	case int16:
+		return float64(v)
 	case float64:
 		return v
 	default:
@@ -76,6 +79,42 @@ func TestDemoStoreIsComplete(t *testing.T) {
 	}
 }
 
+// The period objects are what the web layer's statistics read, so the demo store must answer
+// them, and what they report must be what the per-trip views already say: a period summary
+// over every date is the sum of v_trip_summary, and its weeks add up to it.
+func TestDemoStoreAnswersThePeriodObjects(t *testing.T) {
+	db := buildDemo(t)
+
+	trips := scalar(t, db, "SELECT count(*) FROM v_trip_summary WHERE started_at IS NOT NULL")
+	if trips < 10 {
+		t.Fatalf("v_trip_summary has %v dated trips", trips)
+	}
+	if n := scalar(t, db, "SELECT count(*) FROM v_trip_period"); n != trips {
+		t.Errorf("v_trip_period has %v trips, v_trip_summary %v", n, trips)
+	}
+	all := " FROM period_summary('1970-01-01', '2100-01-01')"
+	if n := scalar(t, db, "SELECT sum(trips)::BIGINT"+all); n != trips {
+		t.Errorf("period_summary counts %v trips over all time, want %v", n, trips)
+	}
+	for _, col := range []string{"duration_ms", "distance_m"} {
+		want := scalar(t, db, "SELECT coalesce(sum("+col+"), 0)::DOUBLE FROM v_trip_summary WHERE started_at IS NOT NULL")
+		if got := scalar(t, db, "SELECT sum("+col+")::DOUBLE"+all); math.Abs(got-want) > 0.001*math.Max(1, want) {
+			t.Errorf("period_summary %s = %v, v_trip_summary says %v", col, got, want)
+		}
+	}
+	if got, want := scalar(t, db, "SELECT max(max_obd_speed_kph)"+all), scalar(t, db, "SELECT max(max_speed_kph) FROM v_drive_summary"); got != want {
+		t.Errorf("max OBD speed = %v, v_drive_summary says %v", got, want)
+	}
+	// the demo's trips fall in more than one calendar week, and the weeks tile the whole
+	if scalar(t, db, "SELECT count(DISTINCT week_start) FROM v_trip_period") < 2 {
+		t.Error("the demo's trips are all in one week, so period grouping is untested")
+	}
+	perWeek := "SELECT sum(trips)::BIGINT FROM (SELECT DISTINCT week_start AS w FROM v_trip_period), period_summary(w, w + 7)"
+	if n := scalar(t, db, perWeek); n != trips {
+		t.Errorf("the weeks hold %v trips, want %v", n, trips)
+	}
+}
+
 func TestDemoVehicleIDHasTheManifestShape(t *testing.T) {
 	if !regexp.MustCompile(`^[0-9a-f]{32}$`).MatchString(demoVehicleID) {
 		t.Fatalf("demoVehicleID %q is not 32 lowercase hex", demoVehicleID)
@@ -89,7 +128,7 @@ func TestEmptyStoreAnswersEveryViewWithZeroRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	for _, view := range []string{"v_drive_summary", "v_vehicles", "v_telemetry"} {
+	for _, view := range []string{"v_drive_summary", "v_vehicles", "v_telemetry", "v_trip_period", "period_summary('2026-01-01', '2027-01-01')"} {
 		if n := scalar(t, db, "SELECT count(*) FROM "+view); n != 0 {
 			t.Errorf("%s has %v rows in an empty store", view, n)
 		}
