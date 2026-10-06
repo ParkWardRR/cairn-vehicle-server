@@ -521,6 +521,18 @@ func (e *exEnv) send(req exRequest) exResponse {
 			e.t.Fatalf("response is not JSON: %v", err)
 		}
 		out.BodyJSON = compact.Bytes()
+		if req.Target == "/v1/health" {
+			// The build identity names the binary under test, so it cannot be pinned in a
+			// vector; the spec lists it, and the healthz tests check it.
+			var m map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &m); err != nil {
+				e.t.Fatal(err)
+			}
+			delete(m, "build")
+			if out.BodyJSON, err = json.Marshal(m); err != nil {
+				e.t.Fatal(err)
+			}
+		}
 		var eb struct {
 			Error string `json:"error"`
 		}
