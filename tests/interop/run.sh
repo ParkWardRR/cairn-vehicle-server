@@ -114,4 +114,13 @@ echo "==> emulator protocol rows against the running server"
   --root-key "$ROOT_HEX" --vehicle-id "$VEHICLE" --assignment-id "$ASSIGNMENT" \
   --server "http://127.0.0.1:$PORT" --verbose
 
+echo "==> emulator as the phone against the relay (fw #12)"
+# The real path: dongle -> BLE -> phone -> /v1/relay/bundles/*. Builds this checkout into its own
+# temporary directory and runs the relay rows plus the rows only the relay has, then proves the
+# run can fail (wrong pinned receipt key, revoked phone). Without this gate the relay path is
+# provable only by hand, which is how a chain ends up never having carried a trip.
+# Its own server, on its own ports: the one above is still running on $PORT.
+INTEROP_PORT=$((PORT + 10)) INTEROP_APP_PORT=$((PORT + 11)) \
+  "$FW/scripts/relay-interop.sh" --server "$ROOT" --selftest
+
 echo "==> interop passed"
