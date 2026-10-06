@@ -127,6 +127,10 @@ type Client struct {
 
 	LastSeenAt    time.Time `json:"last_seen_at,omitzero"`
 	LastTransport string    `json:"last_transport,omitempty"`
+
+	// Replaces is the client this enrolment superseded (key rotation after a device
+	// restore). The old client was revoked in the same write that created this one.
+	Replaces string `json:"replaces,omitempty"`
 }
 
 // Active reports whether the client may authenticate.
@@ -160,6 +164,10 @@ type Invite struct {
 	Name      string   `json:"name,omitempty"`
 	OwnerID   string   `json:"owner_id,omitempty"`
 	CreatedBy string   `json:"created_by,omitempty"`
+
+	// Replaces names a client that accepting this invitation revokes, atomically with
+	// the new enrolment. See InviteSpec.Replaces.
+	Replaces string `json:"replaces,omitempty"`
 
 	CreatedAt  time.Time `json:"created_at"`
 	ExpiresAt  time.Time `json:"expires_at"`
@@ -206,6 +214,13 @@ type InviteSpec struct {
 	OwnerID   string
 	CreatedBy string
 	TTL       time.Duration
+
+	// Replaces is the id of an existing client to revoke when this invitation is
+	// accepted: key rotation (a restored phone enrols a fresh key) without a window in
+	// which both keys work or neither does. The old client must exist. The new client
+	// takes over its owner, so ownership survives the rotation; role and vehicle scope
+	// are whatever this invitation says, never inherited silently.
+	Replaces string
 }
 
 // CreateInvite makes a single-use invitation and returns its code. The code is
@@ -233,6 +248,17 @@ func (r *Registry) CreateInvite(spec InviteSpec) (string, *Invite, error) {
 		return "", nil, err
 	}
 
+	replaces := strings.ToLower(spec.Replaces)
+	if replaces != "" {
+		old, err := r.Get(replaces)
+		if err != nil {
+			return "", nil, err
+		}
+		if spec.OwnerID == "" {
+			spec.OwnerID = old.OwnerID
+		}
+	}
+
 	var raw [16]byte
 	if _, err := rand.Read(raw[:]); err != nil {
 		return "", nil, fmt.Errorf("generate invitation code: %w", err)
@@ -247,6 +273,7 @@ func (r *Registry) CreateInvite(spec InviteSpec) (string, *Invite, error) {
 		Name:      name,
 		OwnerID:   spec.OwnerID,
 		CreatedBy: spec.CreatedBy,
+		Replaces:  replaces,
 		CreatedAt: now,
 		ExpiresAt: now.Add(ttl),
 	}
@@ -359,6 +386,25 @@ func (r *Registry) Enroll(req EnrollRequest) (*Client, error) {
 			KeyID:        hex.EncodeToString(keyID[:8]),
 			Status:       StatusActive,
 			EnrolledAt:   now,
+			Replaces:     inv.Replaces,
+		}
+		if inv.Replaces != "" {
+			// Same write as the new client: a crash leaves both changes or neither. A
+			// client that was already revoked in the meantime stays as it is.
+			var old *Client
+			for _, c := range d.Clients {
+				if c.ID == inv.Replaces {
+					old = c
+				}
+			}
+			if old == nil {
+				return ErrInviteInvalid
+			}
+			if old.Status != StatusRevoked {
+				old.Status = StatusRevoked
+				old.RevokedAt = now
+				old.RevokedReason = "replaced by " + created.ID
+			}
 		}
 		inv.ConsumedAt = now
 		inv.ConsumedBy = created.ID

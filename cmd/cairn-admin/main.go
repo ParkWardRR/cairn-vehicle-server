@@ -228,10 +228,30 @@ func clientCmd(reg *clients.Registry, args []string) error {
 		scope := fs.String("vehicles", "*", "comma-separated vehicle IDs, or * for all")
 		name := fs.String("name", "", "label shown in listings")
 		ttl := fs.Duration("ttl", 0, "lifetime (default 10m)")
+		replaces := fs.String("replaces", "", "id of a client to revoke when this invitation is accepted (key rotation); role, vehicles and name default to that client's")
 		_ = fs.Parse(args[1:])
+		set := map[string]bool{}
+		fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+		if *replaces != "" {
+			// Rotating a key should not quietly change what the phone may do, so the
+			// defaults come from the client being replaced; a flag still overrides.
+			old, err := reg.Get(*replaces)
+			if err != nil {
+				return err
+			}
+			if !set["role"] {
+				*role = string(old.Role)
+			}
+			if !set["vehicles"] {
+				*scope = strings.Join(old.Vehicles, ",")
+			}
+			if !set["name"] {
+				*name = old.Name
+			}
+		}
 		code, inv, err := reg.CreateInvite(clients.InviteSpec{
 			Role: clients.Role(*role), Vehicles: strings.Split(*scope, ","), Name: *name,
-			CreatedBy: "cairn-admin", TTL: *ttl,
+			CreatedBy: "cairn-admin", TTL: *ttl, Replaces: *replaces,
 		})
 		if err != nil {
 			return err
@@ -239,6 +259,9 @@ func clientCmd(reg *clients.Registry, args []string) error {
 		fmt.Printf("invitation code (shown once, single use, expires %s):\n\n    %s\n\n",
 			inv.ExpiresAt.Format(time.RFC3339), clients.FormatCode(code))
 		fmt.Printf("role %s, vehicles %s\n", inv.Role, strings.Join(inv.Vehicles, ","))
+		if inv.Replaces != "" {
+			fmt.Printf("accepting it revokes client %s in the same write\n", inv.Replaces)
+		}
 		return nil
 	case "list":
 		for _, c := range reg.List() {

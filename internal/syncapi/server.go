@@ -521,6 +521,11 @@ func (s *Server) handleEnroll(q *request) (int, string) {
 	}
 
 	q.target = c.ID
+	reason := ""
+	if c.Replaces != "" {
+		// Audit-only: which client this enrolment revoked.
+		reason = "replaced_client=" + c.Replaces
+	}
 	s.writeJSON(q.w, http.StatusCreated, map[string]any{
 		"client_id":   c.ID,
 		"role":        c.Role,
@@ -531,7 +536,7 @@ func (s *Server) handleEnroll(q *request) (int, string) {
 			"spki_sha256": s.cfg.SPKIPin,
 		},
 	})
-	return http.StatusCreated, ""
+	return http.StatusCreated, reason
 }
 
 func (s *Server) handleToken(q *request) (int, string) {
