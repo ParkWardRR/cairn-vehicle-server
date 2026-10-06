@@ -186,5 +186,5 @@ restart
 } > "$snap/MANIFEST"
 chmod 0600 "$snap"/*
 
-log "snapshot written: $(du -sh "$snap" | cut -f1) in $(ls "$snap" | wc -l | tr -d ' ') files"
+log "snapshot written: $(du -sh "$snap" | cut -f1)"
 echo "$snap"
