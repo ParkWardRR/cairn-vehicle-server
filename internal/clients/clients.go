@@ -184,6 +184,7 @@ type document struct {
 type Registry struct {
 	store *jsonstore.Store[document]
 	now   func() time.Time
+	newID func() ([16]byte, error)
 }
 
 // Option configures a Registry.
@@ -193,13 +194,17 @@ type Option func(*Registry)
 // sleeping.
 func WithClock(now func() time.Time) Option { return func(r *Registry) { r.now = now } }
 
+// WithIDs replaces the source of client IDs (UUIDv7 by default), so the vector
+// generator can enrol clients with fixed identities.
+func WithIDs(next func() ([16]byte, error)) Option { return func(r *Registry) { r.newID = next } }
+
 // Open loads the registry at path, creating it on first write.
 func Open(path string, opts ...Option) (*Registry, error) {
 	store, err := jsonstore.Open(path, func() document { return document{} })
 	if err != nil {
 		return nil, err
 	}
-	r := &Registry{store: store, now: func() time.Time { return time.Now().UTC() }}
+	r := &Registry{store: store, now: func() time.Time { return time.Now().UTC() }, newID: vehicles.NewID}
 	for _, o := range opts {
 		o(r)
 	}
@@ -358,7 +363,7 @@ func (r *Registry) Enroll(req EnrollRequest) (*Client, error) {
 			return ErrInviteInvalid
 		}
 
-		id, err := vehicles.NewID()
+		id, err := r.newID()
 		if err != nil {
 			return err
 		}
