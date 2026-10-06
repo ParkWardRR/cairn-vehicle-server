@@ -6,7 +6,7 @@ to the paths this repository owns.
 
 | | |
 |---|---|
-| Source | <https://github.com/ParkWardRR/Cairn> |
+| Source | <https://github.com/ParkWardRR/cairn-driving-log-selfhosted> |
 | Source tag | `monorepo-final` |
 | Source commit | `b3ada35e78414e0ed179b95f356231da877f80a9` |
 | Extraction | `git filter-repo` a40bce548d2c, driven by `split/extract` in that repository |

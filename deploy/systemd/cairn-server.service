@@ -7,7 +7,7 @@
 # receipt-signing seed: that key is what authorizes a device to delete a trip
 # from its card, and losing it means reflashing firmware to re-pin a new one.
 Description=Cairn v3 ingest and app API server
-Documentation=https://github.com/ParkWardRR/Cairn
+Documentation=https://github.com/ParkWardRR/cairn-driving-log-selfhosted
 Documentation=file:/usr/share/doc/cairn/deploying.md
 After=network-online.target
 Wants=network-online.target

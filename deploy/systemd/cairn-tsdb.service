@@ -9,7 +9,7 @@
 # /var/lib/cairn-tsdb/sd/bundles. Bundles also present in the CAS are
 # deduplicated on content root, so mirroring the card again is harmless.
 Description=Cairn in-memory time-series store (decrypts v3 bundles)
-Documentation=https://github.com/ParkWardRR/Cairn
+Documentation=https://github.com/ParkWardRR/cairn-driving-log-selfhosted
 After=cairn-server.service
 
 [Service]

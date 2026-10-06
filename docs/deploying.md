@@ -2,7 +2,7 @@
 
 > **Amended 2026-10-05.** The dongle no longer has Wi-Fi and does not use the
 > `:8443` mTLS listener described here; the enrolled phone relays its bundles through
-> the app API ([app-sync-protocol.md](https://github.com/ParkWardRR/Cairn/blob/main/contracts/sync/v1/spec.md) §13). This page describes
+> the app API ([app-sync-protocol.md](https://github.com/ParkWardRR/cairn-driving-log-selfhosted/blob/main/contracts/sync/v1/spec.md) §13). This page describes
 > the legacy device path, which stays deployed until the relay is proven on hardware
 > and is then retired (Cairn #7). The current deployment is
 > `deploy/deploy-v3.sh`; see also [tailscale-deployment.md](tailscale-deployment.md).

@@ -1,6 +1,6 @@
 # Cairn vehicle server
 
-The self-hosted server of the [Cairn driving log](https://github.com/ParkWardRR/Cairn):
+The self-hosted server of the [Cairn driving log](https://github.com/ParkWardRR/cairn-driving-log-selfhosted):
 it receives encrypted trip bundles from the enrolled phone, verifies and decodes them, keeps the
 record, and answers the phone and the web dashboard. Written in Go; runs on one small machine.
 
@@ -22,7 +22,7 @@ before it deletes anything. See the front door for the whole system.
 ## Contracts
 
 The wire and file formats this server implements are specified, with test vectors, in
-[Cairn Vehicle Data Protocols](https://github.com/ParkWardRR/Cairn/tree/main/contracts). They are not
+[Cairn Vehicle Data Protocols](https://github.com/ParkWardRR/cairn-driving-log-selfhosted/tree/main/contracts). They are not
 copied here: `contracts.lock` pins a release by tag **and** commit, and `scripts/fetch-contracts.sh`
 fetches it into `.contracts/` and checks both. To change a contract and its implementation together, point
 `CAIRN_CONTRACTS` at a local checkout (`CAIRN_CONTRACTS=../Cairn/contracts`); release builds refuse that.
@@ -45,7 +45,7 @@ after the build. No host name is stored in this repository. Read `docs/deploying
 
 ## Related repositories
 
-- [cairn-driving-log-selfhosted](https://github.com/ParkWardRR/Cairn): the front door, system docs and the contracts
+- [cairn-driving-log-selfhosted](https://github.com/ParkWardRR/cairn-driving-log-selfhosted): the front door, system docs and the contracts
 - [cairn-vehicle-web-dashboard](https://github.com/ParkWardRR/cairn-vehicle-web-dashboard): the web dashboard
 - [cairn-esp32-device-firmware](https://github.com/ParkWardRR/cairn-esp32-device-firmware): the dongle firmware
 - [cairn-ios-companion-app](https://github.com/ParkWardRR/cairn-companion-ios-esp32-obd2-gps-ble): the iPhone app
