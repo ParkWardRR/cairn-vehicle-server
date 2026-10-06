@@ -176,6 +176,25 @@ sudo /usr/local/bin/cairn-ledger -summary  /var/lib/cairn/ledger
 sudo /usr/local/bin/cairn-ledger -problems /var/lib/cairn/ledger
 ```
 
+### The app API, over the real listener
+
+`cairn-accept` runs the sync, snapshot and relay acceptance checks against a running
+server. It writes real records (a maintenance event; with `-relay`, a synthetic bundle),
+so give it an invitation scoped to a scratch vehicle:
+
+```bash
+sudo -u cairn /usr/local/bin/cairn-admin -data /var/lib/cairn vehicle add --name acceptance-test
+sudo -u cairn /usr/local/bin/cairn-admin -data /var/lib/cairn client invite --vehicles <vehicle-id>
+cairn-accept -server https://cairn.example.lan:8444 -code <invitation> -vehicle <vehicle-id>
+# afterwards: client revoke <id>, vehicle archive <id>
+```
+
+The authenticated snapshot answers `503 no snapshot available` until `cairn-tsdb` holds
+a bundle, so on a store with none the snapshot checks fail for that reason, not a bug.
+`-relay` needs the synthetic recorder the tests use (`cairn-accept -print-synthetic`
+prints the commands) and is best run against a scratch instance (`-dev`, its own `-data`
+and `cairn-tsdb`), so no synthetic bundle reaches the real store.
+
 ## Building
 
 `server/Makefile` detects the host CPU and selects `GOAMD64=v3`, worth +15.7% on
