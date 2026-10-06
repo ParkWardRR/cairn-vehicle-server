@@ -16,6 +16,7 @@ jobs:
   runner-policy:
     runs-on: [self-hosted, cairn]
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
 
@@ -31,6 +32,7 @@ jobs:
   build:
     runs-on: [self-hosted, cairn]
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -76,6 +78,7 @@ jobs:
   decode-pipeline:
     runs-on: [self-hosted, cairn]
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 20
     needs: [build]
     steps:
       - uses: actions/checkout@v4
