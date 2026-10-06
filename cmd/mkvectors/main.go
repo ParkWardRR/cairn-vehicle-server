@@ -40,7 +40,7 @@ import (
 // Fixed seeds. Deterministic vectors matter more than unpredictable keys here:
 // these are test artifacts, never used to sign anything real.
 var (
-	deviceKeySeed = []byte("cairn-format-v3-device-key-seed!")
+	deviceKeySeed = []byte("cairn-format-v3-device-key-seed?")
 	// A third fixed seed for the OTA update key, kept separate from both the
 	// device and server keys because the authority it carries is different: it
 	// says "this code is safe to run" rather than "this data is mine" or "this
