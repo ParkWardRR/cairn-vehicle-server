@@ -114,6 +114,13 @@ echo "==> emulator protocol rows against the running server"
   --root-key "$ROOT_HEX" --vehicle-id "$VEHICLE" --assignment-id "$ASSIGNMENT" \
   --server "http://127.0.0.1:$PORT" --verbose
 
+echo "==> the C writer's bundles against this server's verifier (fw #8)"
+# The offload and emulator rows above never see bytes the firmware's C format code wrote, so a
+# wrong CRC polynomial or frame layout there would pass them. This seals bundles with the real C
+# writer and judges them with cairn-verify, then proves the check can fail: four mutations of a
+# copy of the C sources must each be rejected.
+"$FW/scripts/interop-writer.sh" --server "$ROOT" --mutation-check
+
 echo "==> emulator as the phone against the relay (fw #12)"
 # The real path: dongle -> BLE -> phone -> /v1/relay/bundles/*. Builds this checkout into its own
 # temporary directory and runs the relay rows plus the rows only the relay has, then proves the
