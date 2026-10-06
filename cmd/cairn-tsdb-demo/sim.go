@@ -389,7 +389,7 @@ func simulate(apps tsdb.Appenders, rng *rand.Rand, rt route, t *template, style 
 			sats := int16(rng.IntN(4))
 			vis := int16(3 + rng.IntN(8))
 			c.pos++
-			return apps.Append("position", root, boot, mono, next(), wall(mono),
+			return apps.Append("position", demoVehicleID, root, boot, mono, next(), wall(mono),
 				0.0, 0.0, nil, nil, nil,
 				uint8(0), sats, vis, nil, nil, nil, nil, uint8(1), uint16(0))
 		}
@@ -412,7 +412,7 @@ func simulate(apps tsdb.Appenders, rng *rand.Rand, rt route, t *template, style 
 		hd := math.Mod(g.heading[i0]*180/math.Pi+360, 360)
 		spd := math.Max(0, v+rng.NormFloat64()*0.08)
 		c.pos++
-		return apps.Append("position", root, boot, mono, next(), wall(mono),
+		return apps.Append("position", demoVehicleID, root, boot, mono, next(), wall(mono),
 			lat, lon, alt+rng.NormFloat64()*0.12, spd, hd,
 			uint8(3), sats, sats+int16(rng.IntN(6)+3), 0.8+canyon*1.4+rng.Float64()*0.3, hacc, hacc*1.6, int32(25+rng.IntN(40)),
 			uint8(1), uint16(0))
@@ -635,7 +635,7 @@ func simulate(apps tsdb.Appenders, rng *rand.Rand, rt route, t *template, style 
 			if inGap && !gapDone {
 				gapDone = true
 				c.gap++
-				if err := apps.Append("gap", root, boot, next(), wall(monoAt(tsec)), uint32(gapLen*1000), uint16(gapLen*4), uint8(2)); err != nil {
+				if err := apps.Append("gap", demoVehicleID, root, boot, next(), wall(monoAt(tsec)), uint32(gapLen*1000), uint16(gapLen*4), uint8(2)); err != nil {
 					return bundleInfo{}, err
 				}
 			}
@@ -650,9 +650,11 @@ func simulate(apps tsdb.Appenders, rng *rand.Rand, rt route, t *template, style 
 				}
 				stftOut := int8(math.Round(stft))
 				c.boost++
-				if err := apps.Append("boost", root, boot, bm, next(), wall(bm),
+				if err := apps.Append("boost", demoVehicleID, root, boot, bm, next(), wall(bm),
 					uint16(math.Round(mapKpa)), uint8(math.Round(baro)), uint16(math.Round(maf)), uint16(math.Round(lam*10000)),
 					uint16(load*100), ambC, stftOut, int8(ltft),
+					// tank level: about 1 % per 6 km for a 52 L tank at ~9 L/100 km
+					uint8(math.Max(8, 74-sPos/1000/5.8)),
 					(math.Round(mapKpa)-math.Round(baro))/6.895, lam,
 					uint32(0x1FFF), answered, uint16(495+rng.IntN(20))); err != nil {
 					return bundleInfo{}, err
@@ -663,7 +665,7 @@ func simulate(apps tsdb.Appenders, rng *rand.Rand, rt route, t *template, style 
 					kph = 0
 				}
 				c.obd++
-				if err := apps.Append("obd", root, boot, om, next(), wall(om),
+				if err := apps.Append("obd", demoVehicleID, root, boot, om, next(), wall(om),
 					int16(math.Max(0, math.Round(kph))), int16(math.Round(rpm)), int16(math.Round(thr)), int16(math.Round(load)),
 					int16(math.Round(coolant)), int16(math.Round(intake)),
 					int32(math.Round(fuelP)), int16(math.Round(timing)),
@@ -677,7 +679,7 @@ func simulate(apps tsdb.Appenders, rng *rand.Rand, rt route, t *template, style 
 			im := monoAt(tsec) + 40
 			rms := math.Sqrt(sumSq / float64(winN))
 			c.imu++
-			if err := apps.Append("imu", root, boot, im, next(), wall(im),
+			if err := apps.Append("imu", demoVehicleID, root, boot, im, next(), wall(im),
 				uint16(500), uint16(math.Min(rms, 60000)),
 				int16(clamp(px, -32000, 32000)), int16(clamp(py, -32000, 32000)), int16(clamp(pz, -32000, 32000)),
 				math.Round(gyroPk*10)/10, uint16(math.Min(rms*rms/100, 60000)), uint16(50),
@@ -699,7 +701,7 @@ func simulate(apps tsdb.Appenders, rng *rand.Rand, rt route, t *template, style 
 				sm := monoAt(tsec) + 80
 				c.status++
 				soak := o.deviceTempC + 14*(1-math.Exp(-tsec/900))
-				if err := apps.Append("status", root, boot, sm, next(), wall(sm),
+				if err := apps.Append("status", demoVehicleID, root, boot, sm, next(), wall(sm),
 					int32(3990-int(tsec/20)+rng.IntN(25)), int32(0), int32(o.sdFreeMiB), int16(math.Round(soak+rng.NormFloat64()*0.4)),
 					nil, nil, nil, uint8(0), uint8(0)); err != nil {
 					return bundleInfo{}, err
@@ -716,7 +718,7 @@ func simulate(apps tsdb.Appenders, rng *rand.Rand, rt route, t *template, style 
 		rssi = int16(-52 - rng.IntN(12))
 	}
 	c.status++
-	if err := apps.Append("status", root, boot, endMono, next(), wall(endMono),
+	if err := apps.Append("status", demoVehicleID, root, boot, endMono, next(), wall(endMono),
 		int32(3960+rng.IntN(20)), int32(0), int32(o.sdFreeMiB), int16(math.Round(o.deviceTempC+14+rng.NormFloat64()*0.5)),
 		rssi, nil, nil, uint8(0), uint8(0)); err != nil {
 		return bundleInfo{}, err
@@ -742,7 +744,7 @@ func simulate(apps tsdb.Appenders, rng *rand.Rand, rt route, t *template, style 
 	trans = append(trans, lifecycle{endMono + 62000, 4, 0, 1, 4, 0, 0, 0, 0})
 	for _, tr := range trans {
 		c.trans++
-		if err := apps.Append("transition", root, boot, tr.mono, next(), wall(tr.mono),
+		if err := apps.Append("transition", demoVehicleID, root, boot, tr.mono, next(), wall(tr.mono),
 			tr.region, tr.from, tr.to, tr.trig, tr.reason, uint8(3), tr.start, tr.stop, tr.wake); err != nil {
 			return bundleInfo{}, err
 		}

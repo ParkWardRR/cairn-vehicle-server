@@ -1,6 +1,7 @@
 // Command cairn-tsdb-demo serves a synthetic store over cairn-tsdb's HTTP API.
 //
 //	cairn-tsdb-demo                  # listens on 127.0.0.1:8480
+//	cairn-tsdb-demo -empty           # the same schema and views with no rows
 //	cairn-tsdb-demo -fetch           # refresh routes.json from the public OSRM demo server
 //
 // It exists so the web UI can be run and photographed (see docs/screenshots)
@@ -59,12 +60,17 @@ var schedule = []outing{
 
 const pdt = -7 * time.Hour
 
+// demoVehicleID is the one invented vehicle every row belongs to (32 lowercase hex, like a
+// real manifest's vehicle id). Every table leads with it.
+var demoVehicleID = hexOf("cairn-demo-vehicle")[:32]
+
 func main() {
 	var (
 		addr    = flag.String("addr", "127.0.0.1:8480", "listen address")
 		fetch   = flag.Bool("fetch", false, "refresh routes.json from OSRM and exit")
 		seed    = flag.Uint64("seed", 7, "random seed")
 		verbose = flag.Bool("v", false, "print one line per generated boot")
+		empty   = flag.Bool("empty", false, "serve the schema with no rows (the empty-store case)")
 	)
 	flag.Parse()
 
@@ -81,6 +87,9 @@ func main() {
 	}
 
 	db, err := tsdb.BuildSynthetic(context.Background(), func(apps tsdb.Appenders) error {
+		if *empty {
+			return nil
+		}
 		return generate(apps, routes, rand.New(rand.NewPCG(*seed, 1)), *verbose)
 	})
 	if err != nil {
@@ -192,7 +201,7 @@ func generate(apps tsdb.Appenders, routes map[string]route, rng *rand.Rand, verb
 				float64(info.durationMS)/60000, info.counts.obd, info.counts.pos)
 		}
 		c := info.counts
-		if err := apps.Append("bundles", info.root, info.bundleID, deviceID, info.bootID, info.origin,
+		if err := apps.Append("bundles", info.root, demoVehicleID, info.bundleID, deviceID, info.bootID, info.origin,
 			int32(1), hexOf("digest", info.root), true, int32(3+rng.IntN(9)),
 			c.pos, c.imu, c.obd, c.boost, c.status, c.trans, c.gap, int32(0), ""); err != nil {
 			return err
