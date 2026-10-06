@@ -267,6 +267,10 @@ func TestHealthIsUnauthenticatedAndRevealsNothingAboutCars(t *testing.T) {
 			t.Fatalf("health leaks %q: %s", leak, body)
 		}
 	}
+	// The build identity is what lets a deploy check tell which release it is probing.
+	if !strings.Contains(body, `"build":{"version":`) || !strings.Contains(body, `"commit":`) {
+		t.Fatalf("health has no build identity: %s", body)
+	}
 }
 
 func TestEnrolmentIsSingleUseAndRequiresProofOfPossession(t *testing.T) {

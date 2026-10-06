@@ -46,6 +46,7 @@ import (
 	"time"
 
 	"github.com/ParkWardRR/cairn-vehicle-server/format"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/buildinfo"
 	"github.com/ParkWardRR/cairn-vehicle-server/internal/keystore"
 	"github.com/ParkWardRR/cairn-vehicle-server/internal/mtls"
 	"github.com/ParkWardRR/cairn-vehicle-server/internal/tsdb"
@@ -160,6 +161,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
+	mux.HandleFunc("GET /capabilities", s.capabilities)
 	mux.HandleFunc("GET /status", s.status)
 	mux.HandleFunc("POST /query", s.query)
 	mux.HandleFunc("POST /reload", s.reload)
@@ -240,13 +242,39 @@ type server struct {
 	reloading sync.Mutex
 }
 
+// health answers "are you serving, which build are you, and which store contract do you
+// implement?". The last two are what a deploy check compares: a bare version number would
+// not notice a release that removed a view the dashboard queries.
 func (s *server) health(w http.ResponseWriter, _ *http.Request) {
 	db := s.cur.Load()
 	if db == nil || !db.Report.OK() && !s.allowUnreproduced {
 		http.Error(w, "not reproducible", http.StatusServiceUnavailable)
 		return
 	}
-	io.WriteString(w, "ok\n")
+	printJSON(w, map[string]any{
+		"status":         "ok",
+		"build":          buildinfo.Get(),
+		"store_contract": tsdb.StoreContract,
+	})
+}
+
+// capabilities lists the tables, views and columns of the store that is serving.
+func (s *server) capabilities(w http.ResponseWriter, r *http.Request) {
+	db := s.cur.Load()
+	if db == nil {
+		http.Error(w, "no store", http.StatusServiceUnavailable)
+		return
+	}
+	caps, err := db.Capabilities(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	printJSON(w, map[string]any{
+		"build":     buildinfo.Get(),
+		"store":     caps,
+		"endpoints": []string{"POST /query", "GET /healthz", "GET /capabilities", "GET /status", "POST /reload", "GET /metrics", "GET /snapshot"},
+	})
 }
 
 func (s *server) status(w http.ResponseWriter, _ *http.Request) {
