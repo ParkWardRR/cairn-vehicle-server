@@ -15,8 +15,11 @@
 # Nothing outside the scratch directory is touched, and no systemd unit is involved
 # (--unit none): this never goes near a real /var/lib/cairn.
 #
-# Usage: tests/snapshot-restore.sh        PORT=19700 sets the first of the live ports
-#        (the restore test uses PORT+10 upward)
+# Usage: tests/snapshot-restore.sh
+#   PORT=19700     first of the live ports (the restore test uses PORT+10 upward)
+#   PREBUILT=DIR   use cairn-server, cairn-admin, cairn-syncdemo and cairn-tsdb from DIR
+#                  instead of building (for a shared host that should not be made to compile)
+#   KEEP=1         leave the scratch directory (and print it) for inspection
 #
 # cairn-tsdb needs cgo and a C toolchain; without them this skips the store half loudly.
 
@@ -31,7 +34,7 @@ cleanup() {
     for p in "${PIDS[@]:-}"; do [[ -n "$p" ]] && kill "$p" 2>/dev/null; done
     sleep 0.5
     for p in "${PIDS[@]:-}"; do [[ -n "$p" ]] && kill -9 "$p" 2>/dev/null; done
-    rm -rf "$WORK"
+    if [[ -n "${KEEP:-}" ]]; then echo "kept $WORK"; else rm -rf "$WORK"; fi
 }
 trap cleanup EXIT
 
@@ -45,9 +48,13 @@ ok() { echo "  ok: $*"; }
 B="$WORK/build"; L="$WORK/live"
 mkdir -p "$B" "$L/data" "$L/etc" "$L/bin" "$L/sd/bundles" "$L/snaps"
 
-echo "building"
-( cd "$REPO_ROOT" && go build -o "$B/" ./cmd/cairn-server ./cmd/cairn-admin ./cmd/cairn-syncdemo ) || fail "build"
-( cd "$REPO_ROOT" && CGO_ENABLED=1 go build -o "$B/cairn-tsdb" ./cmd/cairn-tsdb ) || fail "cairn-tsdb needs cgo and a C toolchain"
+if [[ -n "${PREBUILT:-}" ]]; then
+    B="$PREBUILT"
+else
+    echo "building"
+    ( cd "$REPO_ROOT" && go build -o "$B/" ./cmd/cairn-server ./cmd/cairn-admin ./cmd/cairn-syncdemo ) || fail "build"
+    ( cd "$REPO_ROOT" && CGO_ENABLED=1 go build -o "$B/cairn-tsdb" ./cmd/cairn-tsdb ) || fail "cairn-tsdb needs cgo and a C toolchain"
+fi
 # the "installed" binaries the snapshot will capture
 for b in cairn-server cairn-admin cairn-tsdb; do cp "$B/$b" "$L/bin/$b"; done
 
@@ -121,7 +128,7 @@ start_live
 for a in "$SNAP"/*.tar.gz; do
     tar -tzf "$a" | grep -q 'keystore\.master' && fail "the master key is inside $(basename "$a")"
 done
-[[ "$(stat -f %Lp "$SNAP" 2>/dev/null || stat -c %a "$SNAP")" = 700 ]] || fail "the snapshot directory is not 0700"
+[[ "$(stat -c %a "$SNAP" 2>/dev/null || stat -f %Lp "$SNAP")" = 700 ]] || fail "the snapshot directory is not 0700"
 ok "$(basename "$SNAP"): master key kept beside the archives, directory 0700"
 
 echo
@@ -143,7 +150,7 @@ cp -R "$SNAP" "$WORK/altered"; mkdir "$WORK/altered-data"
 tar -xzf "$WORK/altered/data.tar.gz" -C "$WORK/altered-data"
 echo '{}' > "$WORK/altered-data/clients.json"
 tar -C "$WORK/altered-data" -czf "$WORK/altered/data.tar.gz" .
-new="$(shasum -a 256 "$WORK/altered/data.tar.gz" | cut -d' ' -f1)"
+new="$(sha256sum "$WORK/altered/data.tar.gz" 2>/dev/null || shasum -a 256 "$WORK/altered/data.tar.gz")"; new="${new%% *}"
 sed -i.bak "s/^archive [0-9a-f]* data.tar.gz/archive $new data.tar.gz/" "$WORK/altered/MANIFEST"
 "$REPO_ROOT/deploy/restore-test.sh" local "$WORK/altered" --no-live "${REST_ARGS[@]}" >"$WORK/altered.log" 2>&1 && fail "an altered store restored"
 grep -q 'differs from the file that was snapshotted' "$WORK/altered.log" || { cat "$WORK/altered.log"; fail "altered file: wrong failure"; }
