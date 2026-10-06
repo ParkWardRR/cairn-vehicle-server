@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Self-hosted jobs run only for pushes and for pull requests from branches of THIS
+# repository. A fork's pull request would otherwise run its own code on the machine
+# that also serves production. tests/check-runners.sh fails the build if a job loses
+# its guard, or if a workflow uses pull_request_target or workflow_run.
+jobs:
+  # CI runs on the self-hosted `cairn` runner only, never a GitHub-hosted one.
+  # GitHub offers no setting to forbid hosted runners, so this is the guard.
+  runner-policy:
+    runs-on: [self-hosted, cairn]
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Every job is on the self-hosted runner
+        run: tests/check-runners.sh
+
+      - name: The policy check can actually fail
+        run: tests/check-runners-selftest.sh
+
+  # Gates the bundle format reference implementation against the pinned conformance
+  # vectors, so an accidental format change fails CI instead of silently diverging
+  # from the firmware and emulator.
+  build:
+    runs-on: [self-hosted, cairn]
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch the pinned contracts
+        run: scripts/fetch-contracts.sh
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; echo "run gofmt -w ."; exit 1; }
+
+      # The end-to-end offload tests need the firmware's protocol simulator, which is
+      # built from the firmware repository; they skip loudly without it. The pinned
+      # cross-repository interop job (see the split plan, phase 5) runs them.
+      - name: Test
+        run: go test ./...
+
+      # The vectors are generated deterministically, which is what makes them usable as
+      # a shared input rather than one implementation's output. Regenerating into the
+      # pinned contracts must produce no diff.
+      - name: Conformance vectors are reproducible
+        run: |
+          go run ./cmd/mkvectors
+          git -C .contracts diff --exit-code -- contracts/format/v3/vectors || {
+            echo "Regenerating the vectors produced a diff against the pinned contracts."
+            echo "If the format change is intended, open a contracts pull request first."
+            exit 1
+          }
+
+  # The decode pipeline, against a real PostgreSQL + PostGIS: partitioning, geography
+  # columns, generated columns and ON CONFLICT behaviour are what a fake would get
+  # wrong while reporting success. The database runs INSIDE the job
+  # (tests/ci/postgis.sh): the runner has no container socket, on purpose.
+  decode-pipeline:
+    runs-on: [self-hosted, cairn]
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    needs: [build]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch the pinned contracts
+        run: scripts/fetch-contracts.sh
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Start PostgreSQL + PostGIS and apply the migrations
+        run: |
+          set -euo pipefail
+          echo "CAIRN_TEST_DSN=$(tests/ci/postgis.sh start)" >> "$GITHUB_ENV"
+
+      - name: Decode pipeline tests
+        run: go test ./internal/store/ -count=1 -v
+
+      - name: Stop the database
+        if: always()
+        run: tests/ci/postgis.sh stop
