@@ -139,6 +139,26 @@ jobs:
       - name: Crash during commit
         run: PORT=18701 tests/server-crash-during-commit.sh 4
 
+  # deploy/snapshot.sh and deploy/restore-test.sh against a scratch stack: a snapshot is
+  # refused while the server runs, restores and boots when taken cold, and the restore test
+  # fails on a damaged archive, an altered store and a live stack that has moved on. Scratch
+  # directories and spare ports only: this never goes near a real data directory.
+  snapshot-restore:
+    runs-on: [self-hosted, cairn]
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 20
+    needs: [build]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Snapshot and restore test
+        run: PORT=18710 tests/snapshot-restore.sh
+
   # Interop: this server against the firmware's own code, built from the firmware revision
   # pinned in interop.lock. REQUIRED: a server change that breaks the firmware, or a pin
   # that no longer works with the server, fails here, in the repository that caused it.
