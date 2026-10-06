@@ -1,8 +1,8 @@
 {
   "contracts": {
     "repo": "https://github.com/ParkWardRR/Cairn",
-    "tag": "monorepo-final",
-    "commit": "b3ada35e78414e0ed179b95f356231da877f80a9",
+    "tag": "contracts-v0.1.0",
+    "commit": "56d980bd071cc0a9c22b1813af7a4fcd7f68b4f8",
     "protocols": { "format": "v3", "enrolment": "v1", "sync": "v1", "ble": "v1" }
   }
 }
