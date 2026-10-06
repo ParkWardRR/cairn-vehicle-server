@@ -16,6 +16,7 @@ before it deletes anything. See the front door for the whole system.
 | `cmd/cairn-provision` | one-time dongle provisioning over USB |
 | `cmd/cairn-verify`, `cairn-ledger`, `cairn-signfw` | offline verification, the audit ledger, firmware signing |
 | `cmd/mkvectors` | generates the conformance vectors (into the contracts, see below) |
+| `cmd/dump-schema` | starts the real store and writes its native schema as `store/v1`'s `schema.json` |
 | `format/` | the reference implementation of the bundle format |
 | `deploy/` | systemd units, migrations, `deploy-v3.sh` |
 
@@ -26,6 +27,10 @@ The wire and file formats this server implements are specified, with test vector
 copied here: `contracts.lock` pins a release by tag **and** commit, and `scripts/fetch-contracts.sh`
 fetches it into `.contracts/` and checks both. To change a contract and its implementation together, point
 `CAIRN_CONTRACTS` at a local checkout (`CAIRN_CONTRACTS=../Cairn/contracts`); release builds refuse that.
+
+`contracts/store/v1/schema.json` is generated from this server: `go run ./cmd/dump-schema -o <contracts>/store/v1/schema.json`
+(needs cgo). `internal/storeschema` compares the schema the store builds natively with the pinned file as a compatible
+range (extras allowed; dropping or retyping anything fails), and skips loudly while the pinned release has no `schema.json`.
 
 ## Build and test
 
