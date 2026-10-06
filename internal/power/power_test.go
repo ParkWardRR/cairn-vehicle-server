@@ -3,7 +3,7 @@ package power
 import (
 	"testing"
 
-	"github.com/ParkWardRR/Cairn/server/internal/decode"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/decode"
 )
 
 func enter(seq, ms uint32) decode.Transition {

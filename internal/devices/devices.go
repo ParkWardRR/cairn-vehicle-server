@@ -24,7 +24,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ParkWardRR/Cairn/server/format"
+	"github.com/ParkWardRR/cairn-vehicle-server/format"
 )
 
 var (

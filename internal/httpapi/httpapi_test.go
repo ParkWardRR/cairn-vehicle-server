@@ -12,13 +12,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ParkWardRR/Cairn/server/format"
-	"github.com/ParkWardRR/Cairn/server/internal/cas"
-	"github.com/ParkWardRR/Cairn/server/internal/devices"
-	"github.com/ParkWardRR/Cairn/server/internal/intake"
-	"github.com/ParkWardRR/Cairn/server/internal/outbox"
-	"github.com/ParkWardRR/Cairn/server/internal/receipts"
-	"github.com/ParkWardRR/Cairn/server/internal/testbundle"
+	"github.com/ParkWardRR/cairn-vehicle-server/format"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/cas"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/devices"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/intake"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/outbox"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/receipts"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/testbundle"
 )
 
 type env struct {

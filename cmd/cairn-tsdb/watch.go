@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ParkWardRR/Cairn/server/internal/tsdb"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/tsdb"
 )
 
 // fingerprint summarises what the sources currently hold, cheaply enough to

@@ -6,11 +6,11 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/ParkWardRR/Cairn/server/format"
-	"github.com/ParkWardRR/Cairn/server/internal/counters"
-	"github.com/ParkWardRR/Cairn/server/internal/keystore"
-	"github.com/ParkWardRR/Cairn/server/internal/ledger"
-	"github.com/ParkWardRR/Cairn/server/internal/vehicles"
+	"github.com/ParkWardRR/cairn-vehicle-server/format"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/counters"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/keystore"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/ledger"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/vehicles"
 )
 
 var (

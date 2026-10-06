@@ -18,8 +18,8 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 
-	"github.com/ParkWardRR/Cairn/server/internal/testbundle"
-	"github.com/ParkWardRR/Cairn/server/internal/tsdb"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/testbundle"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/tsdb"
 )
 
 // writeSD lays out a synthetic bundle on a temp SD path, same as the tsdb

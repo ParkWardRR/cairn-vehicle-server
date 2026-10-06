@@ -25,7 +25,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ParkWardRR/Cairn/server/internal/worker"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/worker"
 )
 
 // SchemaVersion is carried in every payload, so a consumer can tell which

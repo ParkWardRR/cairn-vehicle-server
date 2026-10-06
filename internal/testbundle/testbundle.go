@@ -24,7 +24,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"github.com/ParkWardRR/Cairn/server/format"
+	"github.com/ParkWardRR/cairn-vehicle-server/format"
 )
 
 // DeviceKeySeed is the fixed seed for the synthetic device signing key.

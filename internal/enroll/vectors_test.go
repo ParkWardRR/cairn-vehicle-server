@@ -8,7 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"flag"
-	"github.com/ParkWardRR/Cairn/server/internal/contracts"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/contracts"
 	"os"
 	"path/filepath"
 	"testing"

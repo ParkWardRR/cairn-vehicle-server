@@ -1,4 +1,4 @@
-module github.com/ParkWardRR/Cairn/server
+module github.com/ParkWardRR/cairn-vehicle-server
 
 go 1.27
 

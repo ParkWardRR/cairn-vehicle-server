@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ParkWardRR/Cairn/server/internal/syncapi"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/syncapi"
 )
 
 // RelayError is a refusal from the server's relay.

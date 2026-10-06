@@ -15,7 +15,7 @@ import (
 	duckdb "github.com/duckdb/duckdb-go/v2"
 	"github.com/klauspost/compress/zstd"
 
-	"github.com/ParkWardRR/Cairn/server/internal/testbundle"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/testbundle"
 )
 
 func TestSnapshotRoundTrip(t *testing.T) {

@@ -22,17 +22,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ParkWardRR/Cairn/server/internal/audit"
-	"github.com/ParkWardRR/Cairn/server/internal/cas"
-	"github.com/ParkWardRR/Cairn/server/internal/clients"
-	"github.com/ParkWardRR/Cairn/server/internal/devices"
-	"github.com/ParkWardRR/Cairn/server/internal/intake"
-	"github.com/ParkWardRR/Cairn/server/internal/offloadclient"
-	"github.com/ParkWardRR/Cairn/server/internal/outbox"
-	"github.com/ParkWardRR/Cairn/server/internal/receipts"
-	"github.com/ParkWardRR/Cairn/server/internal/syncapi"
-	"github.com/ParkWardRR/Cairn/server/internal/testbundle"
-	"github.com/ParkWardRR/Cairn/server/internal/vehicles"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/audit"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/cas"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/clients"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/devices"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/intake"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/offloadclient"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/outbox"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/receipts"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/syncapi"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/testbundle"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/vehicles"
 )
 
 // These tests run THREE real implementations against each other with no radio:

@@ -7,10 +7,10 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/ParkWardRR/Cairn/server/format"
-	"github.com/ParkWardRR/Cairn/server/internal/cas"
-	"github.com/ParkWardRR/Cairn/server/internal/devices"
-	"github.com/ParkWardRR/Cairn/server/internal/intake"
+	"github.com/ParkWardRR/cairn-vehicle-server/format"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/cas"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/devices"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/intake"
 )
 
 // The bundle relay: the enrolled phone uploads a dongle's sealed bundles on its

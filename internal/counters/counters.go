@@ -30,7 +30,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ParkWardRR/Cairn/server/internal/jsonstore"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/jsonstore"
 )
 
 // Verdict is the outcome of checking a (counter, content_root) pair.

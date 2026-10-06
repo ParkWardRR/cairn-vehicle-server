@@ -28,13 +28,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/ParkWardRR/Cairn/server/internal/contracts"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/contracts"
 	"log"
 	"os"
 	"path/filepath"
 
-	"github.com/ParkWardRR/Cairn/server/format"
-	"github.com/ParkWardRR/Cairn/server/internal/testbundle"
+	"github.com/ParkWardRR/cairn-vehicle-server/format"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/testbundle"
 )
 
 // Fixed seeds. Deterministic vectors matter more than unpredictable keys here:

@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ParkWardRR/Cairn/server/internal/receipts"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/receipts"
 )
 
 // The receipt-signing key is what authorizes a device to delete data. If it

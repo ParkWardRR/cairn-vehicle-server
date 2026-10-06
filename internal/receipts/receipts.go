@@ -22,9 +22,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/ParkWardRR/Cairn/server/internal/cas"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/cas"
 
-	"github.com/ParkWardRR/Cairn/server/format"
+	"github.com/ParkWardRR/cairn-vehicle-server/format"
 )
 
 // IngestSchemaVersion is recorded in every receipt so a consumer can tell which

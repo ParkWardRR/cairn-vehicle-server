@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/ParkWardRR/Cairn/server/internal/counters"
-	"github.com/ParkWardRR/Cairn/server/internal/keystore"
-	"github.com/ParkWardRR/Cairn/server/internal/vehicles"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/counters"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/keystore"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/vehicles"
 )
 
 // Registries is the v3 binding state intake requires, pre-loaded so that

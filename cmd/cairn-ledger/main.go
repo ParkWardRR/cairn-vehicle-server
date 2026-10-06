@@ -21,7 +21,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ParkWardRR/Cairn/server/internal/ledger"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/ledger"
 )
 
 func main() {

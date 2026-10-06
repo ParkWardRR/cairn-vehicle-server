@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ParkWardRR/Cairn/server/format"
-	"github.com/ParkWardRR/Cairn/server/internal/decode"
-	"github.com/ParkWardRR/Cairn/server/internal/power"
+	"github.com/ParkWardRR/cairn-vehicle-server/format"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/decode"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/power"
 )
 
 func main() {

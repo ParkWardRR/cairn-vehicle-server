@@ -30,9 +30,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/ParkWardRR/Cairn/server/format"
-	"github.com/ParkWardRR/Cairn/server/internal/httpapi"
-	"github.com/ParkWardRR/Cairn/server/internal/testbundle"
+	"github.com/ParkWardRR/cairn-vehicle-server/format"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/httpapi"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/testbundle"
 )
 
 func main() {

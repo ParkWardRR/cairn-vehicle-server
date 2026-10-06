@@ -3,7 +3,7 @@ package decode
 import (
 	"testing"
 
-	"github.com/ParkWardRR/Cairn/server/format"
+	"github.com/ParkWardRR/cairn-vehicle-server/format"
 )
 
 // The format package documents that every "unavailable" sentinel is "surfaced

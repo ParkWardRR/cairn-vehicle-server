@@ -8,13 +8,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"flag"
-	"github.com/ParkWardRR/Cairn/server/internal/contracts"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/contracts"
 	"math/big"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/ParkWardRR/Cairn/server/internal/clients"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/clients"
 )
 
 // Pinned signing and enrolment vectors for the iOS app and any other client:

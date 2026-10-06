@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ParkWardRR/Cairn/server/internal/clients"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/clients"
 )
 
 var vehicleIDRE = regexp.MustCompile(`^[0-9a-f]{32}$`)

@@ -20,7 +20,7 @@ package power
 import (
 	"time"
 
-	"github.com/ParkWardRR/Cairn/server/internal/decode"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/decode"
 )
 
 // Wake reasons, matching cairn_power.h and §4.7.1 of the format specification.

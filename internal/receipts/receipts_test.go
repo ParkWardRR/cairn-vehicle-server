@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ParkWardRR/Cairn/server/format"
+	"github.com/ParkWardRR/cairn-vehicle-server/format"
 )
 
 func newStore(t *testing.T) *Store {

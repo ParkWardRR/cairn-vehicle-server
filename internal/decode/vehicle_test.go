@@ -5,9 +5,9 @@ import (
 	"crypto/sha256"
 	"testing"
 
-	"github.com/ParkWardRR/Cairn/server/internal/cas"
-	"github.com/ParkWardRR/Cairn/server/internal/decode"
-	"github.com/ParkWardRR/Cairn/server/internal/testbundle"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/cas"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/decode"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/testbundle"
 )
 
 // decodeFor builds a bundle bound to vehicle and decodes it from a fresh CAS.

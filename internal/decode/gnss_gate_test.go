@@ -3,7 +3,7 @@ package decode
 import (
 	"testing"
 
-	"github.com/ParkWardRR/Cairn/server/format"
+	"github.com/ParkWardRR/cairn-vehicle-server/format"
 )
 
 func fix(seq uint32, ms uint32, lat, lon float64) Position {

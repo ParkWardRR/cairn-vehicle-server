@@ -43,7 +43,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ParkWardRR/Cairn/server/internal/jsonstore"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/jsonstore"
 )
 
 var (

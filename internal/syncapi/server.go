@@ -19,13 +19,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ParkWardRR/Cairn/server/internal/audit"
-	"github.com/ParkWardRR/Cairn/server/internal/clients"
-	"github.com/ParkWardRR/Cairn/server/internal/devices"
-	"github.com/ParkWardRR/Cairn/server/internal/httpapi"
-	"github.com/ParkWardRR/Cairn/server/internal/intake"
-	"github.com/ParkWardRR/Cairn/server/internal/jsonstore"
-	"github.com/ParkWardRR/Cairn/server/internal/vehicles"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/audit"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/clients"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/devices"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/httpapi"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/intake"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/jsonstore"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/vehicles"
 )
 
 // ProtocolVersion is reported by /v1/health so a client can refuse a server it

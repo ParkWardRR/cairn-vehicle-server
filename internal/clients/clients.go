@@ -54,8 +54,8 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/ParkWardRR/Cairn/server/internal/jsonstore"
-	"github.com/ParkWardRR/Cairn/server/internal/vehicles"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/jsonstore"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/vehicles"
 )
 
 // Role is what a client may do beyond syncing its own vehicles.

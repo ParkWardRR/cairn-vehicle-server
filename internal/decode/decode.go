@@ -34,8 +34,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/ParkWardRR/Cairn/server/format"
-	"github.com/ParkWardRR/Cairn/server/internal/cas"
+	"github.com/ParkWardRR/cairn-vehicle-server/format"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/cas"
 )
 
 // Version is the decoder version. Bump it whenever the decode or derivation

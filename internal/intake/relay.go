@@ -3,8 +3,8 @@ package intake
 import (
 	"errors"
 
-	"github.com/ParkWardRR/Cairn/server/format"
-	"github.com/ParkWardRR/Cairn/server/internal/receipts"
+	"github.com/ParkWardRR/cairn-vehicle-server/format"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/receipts"
 )
 
 // ErrNoReceipt means the bundle is known but has no receipt yet: it has been

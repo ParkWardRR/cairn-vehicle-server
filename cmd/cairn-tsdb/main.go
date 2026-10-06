@@ -45,10 +45,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ParkWardRR/Cairn/server/format"
-	"github.com/ParkWardRR/Cairn/server/internal/keystore"
-	"github.com/ParkWardRR/Cairn/server/internal/mtls"
-	"github.com/ParkWardRR/Cairn/server/internal/tsdb"
+	"github.com/ParkWardRR/cairn-vehicle-server/format"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/keystore"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/mtls"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/tsdb"
 )
 
 type config struct {

@@ -14,13 +14,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ParkWardRR/Cairn/server/internal/audit"
-	"github.com/ParkWardRR/Cairn/server/internal/clients"
-	"github.com/ParkWardRR/Cairn/server/internal/devices"
-	"github.com/ParkWardRR/Cairn/server/internal/httpapi"
-	"github.com/ParkWardRR/Cairn/server/internal/intake"
-	"github.com/ParkWardRR/Cairn/server/internal/syncapi"
-	"github.com/ParkWardRR/Cairn/server/internal/vehicles"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/audit"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/clients"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/devices"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/httpapi"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/intake"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/syncapi"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/vehicles"
 )
 
 // The app API is a second listener, never a second route on the device's.

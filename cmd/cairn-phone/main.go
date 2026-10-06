@@ -37,8 +37,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ParkWardRR/Cairn/server/internal/clients"
-	"github.com/ParkWardRR/Cairn/server/internal/offloadclient"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/clients"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/offloadclient"
 	"tinygo.org/x/bluetooth"
 )
 

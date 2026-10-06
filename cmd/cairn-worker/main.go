@@ -27,16 +27,16 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ParkWardRR/Cairn/server/internal/cas"
-	"github.com/ParkWardRR/Cairn/server/internal/decode"
-	"github.com/ParkWardRR/Cairn/server/internal/devices"
-	"github.com/ParkWardRR/Cairn/server/internal/keystore"
-	"github.com/ParkWardRR/Cairn/server/internal/ledger"
-	"github.com/ParkWardRR/Cairn/server/internal/mqtt"
-	"github.com/ParkWardRR/Cairn/server/internal/outbox"
-	"github.com/ParkWardRR/Cairn/server/internal/receipts"
-	"github.com/ParkWardRR/Cairn/server/internal/store"
-	"github.com/ParkWardRR/Cairn/server/internal/worker"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/cas"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/decode"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/devices"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/keystore"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/ledger"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/mqtt"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/outbox"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/receipts"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/store"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/worker"
 )
 
 func main() {

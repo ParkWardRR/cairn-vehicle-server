@@ -11,7 +11,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/ParkWardRR/Cairn/server/internal/clients"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/clients"
 )
 
 // TestGenerateVector prints a fresh test vector. Run it by hand when the

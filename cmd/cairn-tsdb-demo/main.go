@@ -26,7 +26,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/ParkWardRR/Cairn/server/internal/tsdb"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/tsdb"
 )
 
 //go:embed routes.json

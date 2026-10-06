@@ -9,9 +9,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ParkWardRR/Cairn/server/internal/counters"
-	"github.com/ParkWardRR/Cairn/server/internal/devices"
-	"github.com/ParkWardRR/Cairn/server/internal/keystore"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/counters"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/devices"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/keystore"
 )
 
 var (

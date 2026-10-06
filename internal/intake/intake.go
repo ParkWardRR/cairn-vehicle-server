@@ -27,15 +27,15 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/ParkWardRR/Cairn/server/format"
-	"github.com/ParkWardRR/Cairn/server/internal/cas"
-	"github.com/ParkWardRR/Cairn/server/internal/counters"
-	"github.com/ParkWardRR/Cairn/server/internal/devices"
-	"github.com/ParkWardRR/Cairn/server/internal/keystore"
-	"github.com/ParkWardRR/Cairn/server/internal/ledger"
-	"github.com/ParkWardRR/Cairn/server/internal/outbox"
-	"github.com/ParkWardRR/Cairn/server/internal/receipts"
-	"github.com/ParkWardRR/Cairn/server/internal/vehicles"
+	"github.com/ParkWardRR/cairn-vehicle-server/format"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/cas"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/counters"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/devices"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/keystore"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/ledger"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/outbox"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/receipts"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/vehicles"
 )
 
 var (

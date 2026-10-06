@@ -3,7 +3,7 @@ package syncapi
 import (
 	"testing"
 
-	"github.com/ParkWardRR/Cairn/server/internal/clients"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/clients"
 )
 
 // The vector published in contracts/sync/v1/spec.md. If this fails the

@@ -29,8 +29,8 @@ import (
 
 	duckdb "github.com/duckdb/duckdb-go/v2"
 
-	"github.com/ParkWardRR/Cairn/server/format"
-	"github.com/ParkWardRR/Cairn/server/internal/decode"
+	"github.com/ParkWardRR/cairn-vehicle-server/format"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/decode"
 )
 
 // Options tunes a build.

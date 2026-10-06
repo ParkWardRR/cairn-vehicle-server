@@ -9,7 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/ParkWardRR/Cairn/server/internal/decode"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/decode"
 )
 
 // Bulk inserts for decode output.

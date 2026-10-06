@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ParkWardRR/Cairn/server/internal/testbundle"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/testbundle"
 )
 
 // writeSD lays a synthetic bundle out the way the device writes a sealed one:

@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"flag"
-	"github.com/ParkWardRR/Cairn/server/internal/contracts"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/contracts"
 	"io"
 	"os"
 	"os/exec"
@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ParkWardRR/Cairn/server/format"
-	"github.com/ParkWardRR/Cairn/server/internal/testbundle"
+	"github.com/ParkWardRR/cairn-vehicle-server/format"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/testbundle"
 )
 
 // Golden vectors for the BLE offload protocol: what a phone writes and exactly
