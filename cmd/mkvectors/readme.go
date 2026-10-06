@@ -59,6 +59,7 @@ derived from the segment's own header with HKDF-SHA256 as the spec defines.
 | §receipt.cbor§ | A server receipt, signature inline at key 11. |
 | §members.json§ | Member list for content-root vectors. |
 | §keys.json§ | The test key material (top level, shared by all vectors). |
+| §descriptor.cbor§ / §descriptor.sig§ | An update descriptor and its detached signature. |
 | §expected.json§ | The verdict. |
 
 ## Two scans per segment
@@ -89,6 +90,32 @@ clean, cryptographically rejected.
 | §CHAIN_BREAK§ | prev_crc32 did not match: a record was removed, reordered or spliced. |
 | §SEQ_GAP§ | The sequence number skipped a value. |
 | §AUTH_FAILED§ | Keyed scans only. CRC, chain and sequence were fine but the authentication tag was not. Never produced by a structural scan. |
+
+## Negative vectors
+
+Every vector below must be REFUSED, and for the stated reason. Passing only the
+valid vectors proves an implementation accepts what it should; these prove it
+rejects what it must.
+
+| Vectors | What is wrong | Verdict field |
+|---|---|---|
+| §bad-header-crc§, §header-bad-magic§, §header-unsupported-format-version§, §header-short§ | The segment header | §header.parse_error§: §bad_header_crc§, §bad_magic§, §unsupported_format_version§, §short_header§. Refused by a keyless and a keyed scan alike. |
+| §bad-frame-crc§, §chain-break-spliced§, §seq-gap§, §torn-tail-*§ | Frame structure | §scan.stop_reason§ |
+| §auth-tag-tampered§, §frame-header-tampered§, §frame-moved-between-segments§, §wrong-vehicle-key§, §wrong-key-version§ | Authentication; structurally clean | §keyed§ |
+| §manifest-bad-signature§, §manifest-tampered-body§, §manifest-wrong-device-key§ | The manifest signature | §manifest.signature_valid§ false, §valid§ true |
+| §manifest-unsupported-version§, §manifest-non-canonical§, §manifest-missing-mandatory-field§ | The manifest bytes, correctly signed | §manifest.valid§ false |
+| §manifest-segment-header-mismatch§ (assignment_id), §manifest-device-id-mismatch§, §manifest-boot-id-mismatch§, §manifest-vehicle-id-mismatch§, §manifest-device-counter-mismatch§, §manifest-key-version-mismatch§, §manifest-segment-index-mismatch§, §manifest-journal-index-mismatch§, §manifest-segment-gap§ | A segment that does not belong to its manifest | §binding.mismatched_field§ |
+| §receipt-wrong-content-root§, §receipt-bad-signature§, §receipt-wrong-server-key§, §receipt-tampered-content-root§ | The receipt is not an acknowledgement | §receipt.signature_valid§, §receipt.acknowledges_uploaded_root§ |
+| §receipt-unsupported-version§, §receipt-non-canonical§, §receipt-truncated§, §receipt-trailing-bytes§ | The receipt bytes | §receipt.parse_error§: §unsupported_version§, §non_canonical§, §truncated§, §trailing_bytes§ |
+| §update-descriptor-bad-signature§, §update-descriptor-tampered-body§, §update-descriptor-wrong-key§ | The update descriptor signature | §update.signature_valid§ false |
+
+For a manifest with §valid: false§ the whole manifest is refused: the verdict is
+that parsing fails, and §signature_valid§ is false only in the sense that
+verification (signature, then parse) does not succeed. The Ed25519 signature is
+correct over those bytes, so an implementation whose verify call checks the
+signature alone must still refuse at parse and not assert the signature field.
+A §receipt.parse_error§ names the reason; implementations that cannot tell
+every reason apart must still refuse every one.
 
 ## Keyed errors
 
