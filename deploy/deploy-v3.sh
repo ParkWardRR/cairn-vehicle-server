@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
 # Deploy the v3 server stack to the Cairn host.
 #
-#   deploy/deploy-v3.sh <user@host> [--reset-v2-data] [--build-only]
+#   deploy/deploy-v3.sh <user@host> [--reset-v2-data] [--build-only] [--snapshot]
 #
 # --build-only syncs and builds on the host, then stops: nothing is installed and
 # nothing is restarted, so it is safe to run against a host that is serving.
+#
+# --snapshot takes a cold snapshot of the host's state before anything is installed
+# (deploy/snapshot.sh: cairn-server is stopped for the few seconds the copy takes), prints
+# its path, and restore-tests it (deploy/restore-test.sh); a snapshot that does not restore
+# and boot stops the deploy. It cannot be combined with --build-only, which promises not to
+# stop anything.
 #
 # Builds ON the host (cairn-tsdb links DuckDB through cgo, which does not cross-
 # compile from a Mac), from a source rsync rather than a git pull, so it deploys
@@ -16,6 +22,7 @@
 #   2. build with nice and -p 4 (the host is shared with the runner and the
 #      database; an uncapped build has wedged it before)
 #   3. install the binaries, keeping the previous ones as <name>.prev
+#   3b. with --snapshot: snapshot and restore-test the state as it is now
 #   4. install the systemd units from deploy/systemd
 #   5. refuse to restart unless /etc/cairn/server.env and the keystore master key
 #      are in place (they are host-specific and are never overwritten here)
@@ -25,16 +32,18 @@
 #   7. restart and wait for health
 set -euo pipefail
 
-HOST="${1:?usage: deploy-v3.sh <user@host> [--reset-v2-data] [--build-only]}"
+HOST="${1:?usage: deploy-v3.sh <user@host> [--reset-v2-data] [--build-only] [--snapshot]}"
 shift
-RESET=0; BUILD_ONLY=0
+RESET=0; BUILD_ONLY=0; SNAPSHOT=0
 for a in "$@"; do
   case "$a" in
     --reset-v2-data) RESET=1 ;;
     --build-only) BUILD_ONLY=1 ;;
+    --snapshot) SNAPSHOT=1 ;;
     *) echo "unknown option: $a" >&2; exit 2 ;;
   esac
 done
+[ "$SNAPSHOT" = 1 ] && [ "$BUILD_ONLY" = 1 ] && { echo "--snapshot stops cairn-server for the copy; --build-only promises to stop nothing" >&2; exit 2; }
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DATA=/var/lib/cairn
 BINS="cairn-server cairn-admin cairn-verify cairn-ledger cairn-signfw"
@@ -56,6 +65,20 @@ ssh "$HOST" "cd ~/cairn-v3/server && nice -n 10 make build BINDIR=bin GOFLAGS=-p
 if [ "$BUILD_ONLY" = 1 ]; then
   echo "==> built; --build-only, so nothing was installed or restarted"
   exit 0
+fi
+
+if [ "$SNAPSHOT" = 1 ]; then
+  # Here, after the build: a build that fails costs nothing, and a snapshot is only worth
+  # taking when the install that follows is going to happen. --stop-services is the explicit
+  # consent snapshot.sh requires to stop the live unit; passing --snapshot is that consent.
+  echo "==> snapshotting the host's state (cairn-server is stopped for the copy)"
+  SNAP="$("$ROOT/deploy/snapshot.sh" "$HOST" --stop-services | tail -1)"
+  echo "    snapshot: $SNAP (on $HOST)"
+  echo "==> restore-testing the snapshot"
+  "$ROOT/deploy/restore-test.sh" "$HOST" "$SNAP" || {
+    echo "==> Refusing to deploy: the snapshot did not restore cleanly. Nothing was installed." >&2
+    exit 1
+  }
 fi
 
 echo "==> installing binaries"

@@ -211,3 +211,48 @@ To build on the host and install the binaries and systemd units in one step, use
 `deploy/deploy-v3.sh <user@host>` (it also builds `cairn-tsdb`, which needs cgo, and
 keeps the previous binaries as `<name>.prev`). The UI is deployed separately with
 `deploy/deploy-ui.sh`.
+
+## Snapshot before a risky deploy
+
+```bash
+deploy/deploy-v3.sh <user@host> --snapshot          # snapshot, restore-test, then install
+deploy/snapshot.sh <user@host> --stop-services      # just the snapshot; prints its directory
+deploy/restore-test.sh <user@host> <snapshot-dir>   # restore it somewhere harmless and boot it
+```
+
+`snapshot.sh` is a **cold** copy: it stops `cairn-server` for the few seconds the copy takes
+and starts it again afterwards, whatever happens (the store, `cairn-tsdb`, writes nothing
+durable and stays up). That is why it refuses to run while the unit is active unless you
+pass `--stop-services`, and always refuses while some other `cairn-server` process is using
+the data directory. `deploy-v3.sh --snapshot` passes the flag for you (the deploy restarts
+the service anyway), and cannot be combined with `--build-only`. The default is
+`/var/backups/cairn-v3/cairn-<UTC time>/`, mode 0700, root only:
+
+| file | holds |
+|------|-------|
+| `data.tar.gz` | `/var/lib/cairn`: every store the server writes (listed in [retention-and-backup.md](retention-and-backup.md)) |
+| `tsdb-sd.tar.gz` | `/var/lib/cairn-tsdb/sd`, the card mirror |
+| `config.tar.gz` | `/etc/cairn` (certificates, `server.env`) **without** the master key |
+| `units.tar.gz` | `cairn-*.service` and drop-ins from `/etc/systemd/system` |
+| `bin.tar.gz` | the installed `cairn-*` binaries and their `.prev` |
+| `keystore.master` | the keystore master key, kept apart so the archives can travel without it |
+| `MANIFEST` | archive hashes, a hash of every stored file, per-store file counts, binary hashes |
+
+`restore-test.sh` restores into a scratch directory and boots the snapshot's **own** binaries
+over the snapshot's own data and key, on spare loopback ports (`--ports`, default 19600-19603).
+It passes only if every archive matches the manifest; every restored file matches the hash it
+had when it was snapshotted; the key, config and binaries needed to run are present; the
+restored `cairn-server` and `cairn-tsdb` come up; the server serves the receipt key held in the
+snapshot (a server that quietly minted a new one would look healthy and refuse every device);
+and the restored stack answers like the live one: the vehicle list, the app instance id, what
+the store loaded, and `v_vehicles`. The live endpoints come from the snapshotted `server.env`
+(`--live-tsdb`, `--live-local`, `--live-serve` override; `--no-live` skips the comparison).
+Run it right after the snapshot: a trip that lands in between is a real difference. It never
+writes to the live data or services. The restored server runs with `-dev`, so the TLS
+certificates are checked for presence, not exercised.
+
+The web layer's own stores (`/var/lib/cairn-ui`) are snapshotted by that repository's
+`deploy-ui.sh --snapshot`. Old snapshots are not pruned; delete them by hand.
+
+`tests/snapshot-restore.sh` runs all of this end to end against a scratch stack (no systemd,
+no real data directory) and is what to run after changing either script.
