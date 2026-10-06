@@ -38,7 +38,7 @@
 // bound to the device key. Both checks run; neither is relied on alone.
 //
 // The firmware implementation (lib/cairn_prov/cairn_enroll.c) produces
-// byte-identical blobs from the same inputs; fixtures/enroll-v1 pins that.
+// byte-identical blobs from the same inputs; contracts/enrolment/v1/vectors pins that.
 package enroll
 
 import (

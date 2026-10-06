@@ -1,7 +1,7 @@
 // Command mkvectors writes the bundle format v3 conformance vectors to
-// fixtures/format-v3/.
+// contracts/format/v3/vectors/.
 //
-// The vectors are the executable form of docs/bundle-format-v3.md. A
+// The vectors are the executable form of contracts/format/v3/spec.md. A
 // conformance runner needs no knowledge of this implementation: each vector
 // directory holds the input bytes and an expected.json stating the verdict and
 // derived values, so the firmware (C) and emulator (Rust) implementations can
@@ -13,10 +13,10 @@
 // byte-identical output and a clean diff.
 //
 // THE KEYS IN THESE VECTORS ARE PUBLIC TEST KEYS. They are published in the
-// repository and in fixtures/format-v3/README.md. They protect nothing and must
+// repository and in contracts/format/v3/vectors/README.md. They protect nothing and must
 // never be provisioned onto a device or loaded into a real keystore.
 //
-//	go run ./cmd/mkvectors -out ../fixtures/format-v3
+//	go run ./cmd/mkvectors                       # into $CAIRN_CONTRACTS/format/v3/vectors
 package main
 
 import (
@@ -28,6 +28,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/ParkWardRR/Cairn/server/internal/contracts"
 	"log"
 	"os"
 	"path/filepath"
@@ -207,8 +208,11 @@ type obdExtExpectation struct {
 }
 
 func main() {
-	out := flag.String("out", "../fixtures/format-v3", "output directory for the vectors")
+	out := flag.String("out", "", "output directory for the vectors (default: $CAIRN_CONTRACTS/format/v3/vectors)")
 	flag.Parse()
+	if *out == "" {
+		*out = contracts.Vectors("format", "v3")
+	}
 
 	if err := run(*out); err != nil {
 		log.Fatal(err)

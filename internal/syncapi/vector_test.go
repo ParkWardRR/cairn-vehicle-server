@@ -6,7 +6,7 @@ import (
 	"github.com/ParkWardRR/Cairn/server/internal/clients"
 )
 
-// The vector published in docs/app-sync-protocol.md. If this fails the
+// The vector published in contracts/sync/v1/spec.md. If this fails the
 // document is lying to the iOS client's author, so change both together.
 const (
 	vectorPublicKey = "049865616d17bd8336564c615ad4076c347938be436834bae774437ab3530e216b21025bb8042070ee6c9276fa4dd857e2525a8a2915aba1e45761cedfd8aada39"

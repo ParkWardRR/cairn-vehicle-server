@@ -1,8 +1,8 @@
 // Package format is the reference implementation of Cairn bundle format v3.
 //
-// The normative specification is docs/bundle-format-v3.md. Where this package
+// The normative specification is contracts/format/v3/spec.md. Where this package
 // and that document disagree, the document is correct and this package has a
-// bug. The conformance vectors in fixtures/format-v3/ are the executable form
+// bug. The conformance vectors in contracts/format/v3/vectors/ are the executable form
 // of the specification; the firmware (C) and emulator (Rust) implementations
 // must produce byte-identical output and identical parse verdicts.
 //

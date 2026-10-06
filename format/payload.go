@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// Typed payload decoders for the record schemas in docs/bundle-format-v3.md
+// Typed payload decoders for the record schemas in contracts/format/v3/spec.md
 // section 4.
 //
 // Every "unavailable" sentinel the specification defines is honoured and

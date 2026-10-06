@@ -1,5 +1,5 @@
 // Package offloadclient is the phone's half of BLE bundle offload
-// (docs/ble-offload.md): it pulls sealed bundles off a dongle, relays them to the
+// (contracts/ble/v1/offload.md): it pulls sealed bundles off a dongle, relays them to the
 // server, and hands the signed receipt back.
 //
 // It is independent of how bytes reach the dongle. A Transport carries them: the

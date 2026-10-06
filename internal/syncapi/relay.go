@@ -14,7 +14,7 @@ import (
 )
 
 // The bundle relay: the enrolled phone uploads a dongle's sealed bundles on its
-// behalf (docs/app-sync-protocol.md section 13, docs/ble-offload.md).
+// behalf (contracts/sync/v1/spec.md section 13, contracts/ble/v1/offload.md).
 //
 // The dongle has no network, so these endpoints replace the device-facing intake
 // listener for it. They add NO trust decisions of their own. Every check that

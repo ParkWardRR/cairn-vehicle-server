@@ -33,7 +33,7 @@ import (
 // tripSummarySQL selects one row per (vehicle, boot).
 //
 // Everything is converted to integers here, because the protocol forbids floats
-// in payloads (docs/app-sync-protocol.md §4.1: two languages disagree about how
+// in payloads (contracts/sync/v1/spec.md §4.1: two languages disagree about how
 // to print them, and a hash over a printed float is a hash over a disagreement).
 // Timestamps are epoch milliseconds, speeds are cm/s, distance is whole metres.
 const tripSummarySQL = `SELECT vehicle_id, boot_id, device_id,

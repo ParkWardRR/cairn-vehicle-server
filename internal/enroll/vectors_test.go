@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"flag"
+	"github.com/ParkWardRR/Cairn/server/internal/contracts"
 	"os"
 	"path/filepath"
 	"testing"
@@ -17,9 +18,9 @@ import (
 // vectors. CI runs without -update, so a change to Seal that alters a single
 // byte fails here rather than silently diverging from the firmware, which is
 // checked against the same file.
-var update = flag.Bool("update", false, "rewrite fixtures/enroll-v1/vectors.json")
+var update = flag.Bool("update", false, "rewrite contracts/enrolment/v1/vectors/vectors.json")
 
-const vectorPath = "../../../fixtures/enroll-v1/vectors.json"
+var vectorPath = contracts.Path("enrolment", "v1", "vectors", "vectors.json")
 
 type vectorFile struct {
 	Description string   `json:"description"`
@@ -157,7 +158,7 @@ func TestVectors(t *testing.T) {
 		t.Fatalf("read vectors (regenerate with -update): %v", err)
 	}
 	if !bytes.Equal(got, encoded) {
-		t.Fatal("fixtures/enroll-v1/vectors.json differs from what Seal produces; " +
+		t.Fatal("contracts/enrolment/v1/vectors/vectors.json differs from what Seal produces; " +
 			"if the change is intended, regenerate with: go test ./internal/enroll -run TestVectors -update")
 	}
 

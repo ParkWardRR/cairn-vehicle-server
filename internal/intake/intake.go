@@ -1,5 +1,5 @@
 // Package intake implements the manifest-first, content-addressed upload
-// protocol from docs/bundle-format-v3.md section 6.
+// protocol from contracts/format/v3/spec.md section 6.
 //
 // The protocol is three steps — offer, transfer, commit — and the design rule
 // throughout is that ingest validates, durably stores, receipts and returns.

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"flag"
+	"github.com/ParkWardRR/Cairn/server/internal/contracts"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -17,7 +18,7 @@ import (
 )
 
 // Pinned signing and enrolment vectors for the iOS app and any other client:
-// fixtures/app-sync-v1/vectors.json.
+// contracts/sync/v1/vectors/vectors.json.
 //
 // ECDSA is randomised, so a signature cannot be reproduced, only verified. The
 // fixture therefore carries one genuine signature per case, made once with the
@@ -28,7 +29,7 @@ import (
 // server; one that cannot reproduce the string does not.
 //
 //	go test ./internal/syncapi -run Vectors -update-vectors   (after a deliberate change)
-var updateVectors = flag.Bool("update-vectors", false, "rewrite fixtures/app-sync-v1/vectors.json")
+var updateVectors = flag.Bool("update-vectors", false, "rewrite contracts/sync/v1/vectors/vectors.json")
 
 // A public test key. It is committed to a public repository and protects nothing.
 const vectorScalarHex = "11065c969d488e9a896d78d3fcc6d3b831da4d22df873d6f3668b4c55b28b889"
@@ -99,7 +100,7 @@ func generateAppVectors() appVectors {
 	key := testKey()
 	pub := clients.PublicKeyHex(&key.PublicKey)
 	v := appVectors{
-		Version: 1, Spec: "docs/app-sync-protocol.md section 2",
+		Version: 1, Spec: "contracts/sync/v1/spec.md section 2",
 		Notes: []string{
 			"ECDSA is randomised: signatures cannot be reproduced, only verified. Build the signing_string yourself from the other fields and check it equals the one given; then verify signature_der_base64 over SHA-256(signing_string) with test_key.public_key_x963_hex. Do both: agreeing on the string and on verification is what proves compatibility with the server.",
 			"signature_der_base64 is the ASN.1 DER ECDSA-P256-SHA256 signature, standard base64 with padding. CryptoKit: signature.derRepresentation.",
@@ -134,7 +135,7 @@ func generateAppVectors() appVectors {
 }
 
 func TestAppSyncVectorsAreStableAndVerify(t *testing.T) {
-	path, _ := filepath.Abs("../../../fixtures/app-sync-v1/vectors.json")
+	path := contracts.Path("sync", "v1", "vectors", "vectors.json")
 	if *updateVectors {
 		b, err := json.MarshalIndent(generateAppVectors(), "", "  ")
 		if err != nil {

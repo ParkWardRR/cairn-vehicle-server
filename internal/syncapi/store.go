@@ -673,7 +673,7 @@ func duplicateOf(op Op, orig *record) OpResult {
 }
 
 // evaluate decides one operation. The order of the checks is deliberate and
-// documented in docs/app-sync-protocol.md:
+// documented in contracts/sync/v1/spec.md:
 //
 //  1. cheap structural checks that need no state;
 //  2. scope, before anything that would reveal whether a vehicle or an

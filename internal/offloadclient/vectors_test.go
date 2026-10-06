@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"flag"
+	"github.com/ParkWardRR/Cairn/server/internal/contracts"
 	"io"
 	"os"
 	"os/exec"
@@ -27,7 +28,7 @@ import (
 // not hand-written, so they cannot drift from it; this test fails if they do.
 //
 //	go test ./internal/offloadclient -run Vectors -update-vectors
-var updateVectors = flag.Bool("update-vectors", false, "rewrite fixtures/ble-offload-v1/vectors.json")
+var updateVectors = flag.Bool("update-vectors", false, "rewrite contracts/ble/v1/vectors/offload/vectors.json")
 
 type event struct {
 	T   string `json:"t"` // control_write, data_write, mtu, indication, notification
@@ -183,7 +184,7 @@ func buildVectors(t *testing.T) vectorFile {
 
 	sum := hashHex(b.Stream)
 	vf := vectorFile{
-		Version: 1, Spec: "docs/ble-offload.md", MTU: 247,
+		Version: 1, Spec: "contracts/ble/v1/offload.md", MTU: 247,
 		Notes: []string{
 			"All frames are hex. Control writes go to OFFLOAD_CONTROL; the dongle's indications come back on it. Data notifications come on OFFLOAD_DATA; receipt frames are written to it.",
 			"Every scenario starts a fresh dongle with the bundle above on its card and the MTU already negotiated to att_mtu (an `mtu` event is shown where a scenario changes it).",
@@ -317,7 +318,7 @@ func TestVectorsAreGeneratedFromTheFirmwareAndHaveNotDrifted(t *testing.T) {
 	must(t, err)
 	got = append(got, '\n')
 
-	path, _ := filepath.Abs("../../../fixtures/ble-offload-v1/vectors.json")
+	path := contracts.Path("ble", "v1", "vectors", "offload", "vectors.json")
 	if *updateVectors {
 		must(t, os.MkdirAll(filepath.Dir(path), 0o755))
 		must(t, os.WriteFile(path, got, 0o644))
@@ -329,6 +330,6 @@ func TestVectorsAreGeneratedFromTheFirmwareAndHaveNotDrifted(t *testing.T) {
 		t.Fatalf("%v: generate them with -update-vectors", err)
 	}
 	if !bytes.Equal(got, want) {
-		t.Fatalf("fixtures/ble-offload-v1/vectors.json differs from what the firmware produces now.\nIf the protocol changed on purpose, regenerate with:\n  go test ./internal/offloadclient -run Vectors -update-vectors\nand tell the iOS app, which replays them.")
+		t.Fatalf("contracts/ble/v1/vectors/offload/vectors.json differs from what the firmware produces now.\nIf the protocol changed on purpose, regenerate with:\n  go test ./internal/offloadclient -run Vectors -update-vectors\nand tell the iOS app, which replays them.")
 	}
 }

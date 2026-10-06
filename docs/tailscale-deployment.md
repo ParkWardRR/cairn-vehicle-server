@@ -20,7 +20,7 @@ iPhone ── LAN Wi-Fi ───────────► https://cairn.examp
 Dongle ── BLE ──► iPhone ──(either path above)──► relay endpoints on the app listener
 ```
 
-The dongle has no Wi-Fi: the phone carries its bundles ([ble-offload.md](ble-offload.md)),
+The dongle has no Wi-Fi: the phone carries its bundles ([ble-offload.md](../contracts/ble/v1/offload.md)),
 so the Tailnet path above also carries trip uploads. The legacy `:8443` device listener
 is no longer used by any dongle and is retired once the relay is proven (Cairn #7).
 
