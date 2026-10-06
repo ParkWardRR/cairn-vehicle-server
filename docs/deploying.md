@@ -212,6 +212,18 @@ To build on the host and install the binaries and systemd units in one step, use
 keeps the previous binaries as `<name>.prev`). The UI is deployed separately with
 `deploy/deploy-ui.sh`.
 
+## Is the stack healthy?
+
+`deploy/healthcheck.sh` (installed as `/usr/local/bin/cairn-healthcheck`) checks the whole
+stack from the host: the units (`cairn-server`, `cairn-tsdb`, `cairn-ui`, `caddy`,
+`tailscaled`), the app API and tsdb endpoints, the dashboard *through the reverse proxy*,
+`tailscaled`'s LocalAPI (the dashboard's tailnet identity depends on it), and the proxy's
+certificate (fails under 14 days). It exits non-zero and names each failure. `deploy-v3.sh`
+installs it with a systemd timer (`cairn-healthcheck.timer`, every 5 minutes), so a stack
+that has quietly lost a link shows up in `systemctl --failed`, and runs it as the last step
+of every deploy. Tailnet sign-in needs no `tailscale serve` config: the UI asks `tailscaled`
+who owns the peer address behind Caddy (see the dashboard's `docs/auth.md`).
+
 ## Snapshot before a risky deploy
 
 ```bash

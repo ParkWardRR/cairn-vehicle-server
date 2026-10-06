@@ -91,7 +91,12 @@ done"
 echo "==> installing systemd units"
 ssh "$HOST" 'cd ~/cairn-v3/deploy/systemd && for u in cairn-server.service cairn-tsdb.service; do
   sudo install -m 0644 $u /etc/systemd/system/$u
-done && sudo systemctl daemon-reload'
+done
+# The stack health check and its timer (a failing run shows in `systemctl --failed`).
+sudo install -m 0755 ~/cairn-v3/deploy/healthcheck.sh /usr/local/bin/cairn-healthcheck
+for u in cairn-healthcheck.service cairn-healthcheck.timer; do
+  sudo install -m 0644 $u /etc/systemd/system/$u
+done && sudo systemctl daemon-reload && sudo systemctl enable --now cairn-healthcheck.timer'
 
 echo "==> checking host-specific configuration"
 ssh "$HOST" 'set -e
@@ -115,4 +120,11 @@ echo "==> restarting"
 ssh "$HOST" 'sudo systemctl restart cairn-server && sleep 2 && sudo systemctl restart cairn-tsdb && sleep 3
 systemctl is-active cairn-server cairn-tsdb
 journalctl -u cairn-server -n 6 --no-pager | tail -6'
+echo "==> health check (units, endpoints, proxy, certificate)"
+# The services were just restarted: allow a few seconds for them to answer before failing.
+ssh "$HOST" 'for i in 1 2 3 4 5 6; do /usr/local/bin/cairn-healthcheck --quiet && exit 0; sleep 5; done
+echo "unhealthy after the deploy:" >&2; /usr/local/bin/cairn-healthcheck >&2; exit 1' || {
+  echo "==> The deploy installed, but the stack is not healthy. Previous binaries are kept as <name>.prev." >&2
+  exit 1
+}
 echo "==> done. Next: seed vehicles and enrol devices (docs/device-provisioning.md)"

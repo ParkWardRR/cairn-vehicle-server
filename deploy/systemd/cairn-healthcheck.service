@@ -1,0 +1,12 @@
+[Unit]
+Description=Cairn stack health check (units, endpoints, proxy, certificate)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/cairn-healthcheck --quiet
+# Read-only and unprivileged: it only asks questions over loopback.
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
