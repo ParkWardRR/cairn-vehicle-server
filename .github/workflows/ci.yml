@@ -64,8 +64,12 @@ jobs:
       # pinned contracts must produce no diff.
       - name: Conformance vectors are reproducible
         run: |
+          export CAIRN_CONTRACTS="$PWD/.contracts/contracts"
           go run ./cmd/mkvectors
-          git -C .contracts diff --exit-code -- contracts/format/v3/vectors || {
+          # status, not diff: a vector the pinned release lacks is untracked, not modified
+          changed="$(git -C .contracts status --porcelain -- contracts/format/v3/vectors contracts/enrolment/v1/vectors)"
+          [ -z "$changed" ] || {
+            echo "$changed"
             echo "Regenerating the vectors produced a diff against the pinned contracts."
             echo "If the format change is intended, open a contracts pull request first."
             exit 1

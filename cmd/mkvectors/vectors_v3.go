@@ -247,6 +247,15 @@ type vectorBundle struct {
 // manifest over them. captureHeader adjusts the capture segment's header before
 // it is written, which is how a vector makes a segment disagree with the manifest.
 func buildVectorBundle(devicePriv ed25519.PrivateKey, captureHeader func(*format.SegmentHeader)) (*vectorBundle, error) {
+	return buildVectorBundleWith(devicePriv, captureHeader, nil)
+}
+
+// buildVectorBundleWith is buildVectorBundle with a second hook: mutate edits the
+// segment bytes (or renames them) before the manifest's digests are computed, so
+// the bundle stays digest-consistent. It is how a vector breaks a rule that the
+// writer would not let it break, such as a header that disagrees with its key.
+func buildVectorBundleWith(devicePriv ed25519.PrivateKey, captureHeader func(*format.SegmentHeader),
+	mutate func(files map[string][]byte)) (*vectorBundle, error) {
 	h0 := testHeader(0)
 	if captureHeader != nil {
 		captureHeader(&h0)
@@ -275,6 +284,9 @@ func buildVectorBundle(devicePriv ed25519.PrivateKey, captureHeader func(*format
 	files := map[string][]byte{
 		"seg-00000000.seg": append([]byte(nil), w0.Bytes()...),
 		"journal.seg":      append([]byte(nil), wj.Bytes()...),
+	}
+	if mutate != nil {
+		mutate(files)
 	}
 
 	members := make([]format.Member, 0, len(files))
@@ -324,10 +336,13 @@ func (vb *vectorBundle) manifestExpectation(devicePriv ed25519.PrivateKey) *mani
 }
 
 func (vb *vectorBundle) segments() map[string][]byte {
-	return map[string][]byte{
-		"seg-00000000.seg": vb.files["seg-00000000.seg"],
-		"journal.seg":      vb.files["journal.seg"],
+	out := make(map[string][]byte, len(vb.files))
+	for name, data := range vb.files {
+		if name != "manifest.cbor" && name != "manifest.sig" {
+			out[name] = data
+		}
 	}
+	return out
 }
 
 func vectorManifestMembersMatch(dir string, devicePriv, _ ed25519.PrivateKey) error {

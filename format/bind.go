@@ -83,7 +83,7 @@ func VerifyMembersAgainstManifest(m *Manifest, members map[string][]byte) error 
 		isCapture := strings.HasPrefix(mem.Name, "seg-")
 		if isCapture {
 			if want := SegmentMemberName(uint32(captures)); mem.Name != want {
-				return fmt.Errorf("%w: manifest capture segment %d is named %q, want %q",
+				return fmt.Errorf("%w: segment_index: manifest capture segment %d is named %q, want %q",
 					ErrManifestBindingMismatch, captures, mem.Name, want)
 			}
 			captures++
