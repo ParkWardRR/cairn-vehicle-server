@@ -83,9 +83,38 @@ func TestCompareFailsOnABreakingChange(t *testing.T) {
 		{"a column retyped", func(s *Schema) { s.Tables["position"] = retyped(s.Tables["position"], "lat", "VARCHAR") }, "column lat is VARCHAR, the contract requires DOUBLE"},
 		{"a column narrowed", func(s *Schema) { s.Tables["position"] = retyped(s.Tables["position"], "mono_ms", "USMALLINT") }, "column mono_ms is USMALLINT"},
 		{"a column changed sign", func(s *Schema) { s.Tables["position"] = retyped(s.Tables["position"], "mono_ms", "INTEGER") }, "column mono_ms is INTEGER"},
+		{"a macro dropped", func(s *Schema) { delete(s.Macros, "period_summary") }, "macro period_summary is missing"},
+		{"a macro parameter renamed", func(s *Schema) {
+			m := s.Macros["period_summary"]
+			m.Parameters = []string{"from_day", "until"}
+			s.Macros["period_summary"] = m
+		}, "macro period_summary: parameters are (from_day, until)"},
+		{"a macro parameter added", func(s *Schema) {
+			m := s.Macros["period_summary"]
+			m.Parameters = append(m.Parameters, "tz")
+			s.Macros["period_summary"] = m
+		}, "macro period_summary: parameters"},
+		{"a macro column dropped", func(s *Schema) {
+			m := s.Macros["period_summary"]
+			m.Columns = m.Columns[1:]
+			s.Macros["period_summary"] = m
+		}, "macro period_summary: column vehicle_id is missing"},
+		{"a macro column retyped", func(s *Schema) {
+			m := s.Macros["period_summary"]
+			m.Columns = append([]Column{}, m.Columns...)
+			m.Columns[2].Type = "DOUBLE"
+			s.Macros["period_summary"] = m
+		}, "macro period_summary: column duration_ms is DOUBLE"},
+		{"a macro became a view", func(s *Schema) {
+			s.Views["period_summary"] = Object{Columns: []Column{{"vehicle_id", "VARCHAR"}}}
+			delete(s.Macros, "period_summary")
+		}, "macro period_summary is now a view"},
 		{"another major", func(s *Schema) { s.StoreContract = "store/v2.0" }, "different major"},
 
 		// what a minor adds is allowed
+		{"a new macro", func(s *Schema) {
+			s.Macros["extra"] = Macro{Parameters: []string{"a"}, Columns: []Column{{"vehicle_id", "VARCHAR"}}}
+		}, ""},
 		{"a new table, view and column", func(s *Schema) {
 			s.Tables["extra"] = Object{Columns: []Column{{"vehicle_id", "VARCHAR"}}}
 			s.Views["v_extra"] = Object{Columns: []Column{{"vehicle_id", "VARCHAR"}}}
@@ -124,6 +153,25 @@ func TestCompareChecksTheMinor(t *testing.T) {
 	p.StoreContract = "store/v1.9"
 	if r := strings.Join(Compare(p, n), "\n"); !strings.Contains(r, "is older") {
 		t.Fatalf("a release older than the pinned minor was accepted: %q", r)
+	}
+}
+
+// The schema.json of store/v1.0 knows neither the macro nor v_trip_period; a release that
+// adds them is still a release of that contract.
+func TestAdditiveMinorSatisfiesTheOlderPinnedFile(t *testing.T) {
+	n := native(t)
+	old := clone(t, n)
+	old.StoreContract = "store/v1.0"
+	old.Macros = nil
+	delete(old.Views, "v_trip_period")
+	if r := Compare(old, n); len(r) != 0 {
+		t.Fatalf("a v1.0 file is not satisfied by %s: %v", n.StoreContract, r)
+	}
+	if _, ok := n.Views["v_trip_period"]; !ok {
+		t.Fatal("the native schema has no v_trip_period")
+	}
+	if _, ok := n.Macros["period_summary"]; !ok {
+		t.Fatal("the native schema has no period_summary")
 	}
 }
 

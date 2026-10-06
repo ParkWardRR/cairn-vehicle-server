@@ -29,6 +29,16 @@ type Schema struct {
 	StoreContract string            `json:"store_contract"`
 	Tables        map[string]Object `json:"tables"`
 	Views         map[string]Object `json:"views"`
+	// Macros are the table macros (store/v1.1 on): queries with parameters, called as
+	// SELECT * FROM name(args). Absent from a file generated before they existed.
+	Macros map[string]Macro `json:"macros,omitempty"`
+}
+
+// Macro is a table macro: its parameter names in order, which a caller may pass by
+// position or by name, and the columns it returns.
+type Macro struct {
+	Parameters []string `json:"parameters"`
+	Columns    []Column `json:"columns"`
 }
 
 // Object is one table or view.
@@ -64,6 +74,16 @@ func FromCapabilities(c tsdb.Capabilities) Schema {
 	for _, n := range c.Views {
 		s.Views[n] = obj(n)
 	}
+	for n, m := range c.Macros {
+		if s.Macros == nil {
+			s.Macros = map[string]Macro{}
+		}
+		out := Macro{Parameters: m.Parameters}
+		for i, col := range m.Columns {
+			out.Columns = append(out.Columns, Column{Name: col, Type: m.ColumnTypes[i]})
+		}
+		s.Macros[n] = out
+	}
 	return s
 }
 
@@ -94,7 +114,9 @@ func Load(path string) (Schema, error) {
 // A release satisfies the contract when it has the same major, at least the pinned minor,
 // and every pinned table and view is the same kind of object in native with every pinned
 // column present under a compatible type. Anything native has beyond that is allowed.
-// Column order is not part of the contract: consumers read columns by name.
+// Column order is not part of the contract: consumers read columns by name. A pinned macro
+// must exist with the same parameter names in the same order (a caller may pass them by
+// position or by name) and return every pinned column under a compatible type.
 func Compare(pinned, native Schema) []string {
 	var out []string
 	add := func(format string, a ...any) { out = append(out, fmt.Sprintf(format, a...)) }
@@ -139,6 +161,35 @@ func Compare(pinned, native Schema) []string {
 				case !Compatible(c.Type, got):
 					add("%s %s: column %s is %s, the contract requires %s", k.kind, name, c.Name, got, c.Type)
 				}
+			}
+		}
+	}
+
+	for _, name := range sortedMacros(pinned.Macros) {
+		want := pinned.Macros[name]
+		have, ok := native.Macros[name]
+		if !ok {
+			if _, view := native.Views[name]; view {
+				add("macro %s is now a view", name)
+			} else {
+				add("macro %s is missing", name)
+			}
+			continue
+		}
+		if strings.Join(have.Parameters, ",") != strings.Join(want.Parameters, ",") {
+			add("macro %s: parameters are (%s), the contract requires (%s)", name, strings.Join(have.Parameters, ", "), strings.Join(want.Parameters, ", "))
+		}
+		types := map[string]string{}
+		for _, c := range have.Columns {
+			types[strings.ToLower(c.Name)] = c.Type
+		}
+		for _, c := range want.Columns {
+			got, ok := types[strings.ToLower(c.Name)]
+			switch {
+			case !ok:
+				add("macro %s: column %s is missing", name, c.Name)
+			case !Compatible(c.Type, got):
+				add("macro %s: column %s is %s, the contract requires %s", name, c.Name, got, c.Type)
 			}
 		}
 	}
@@ -199,6 +250,15 @@ func parse(s string) (major, minor int) {
 func major(s string) int { m, _ := parse(s); return m }
 
 func sortedKeys(m map[string]Object) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func sortedMacros(m map[string]Macro) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
