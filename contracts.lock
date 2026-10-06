@@ -2,7 +2,7 @@
   "contracts": {
     "repo": "https://github.com/ParkWardRR/cairn-driving-log-selfhosted",
     "tag": "contracts-v0.2.0",
-    "commit": "5a282d0a1d3984605a70c206bb68fb7966e6b34c",
+    "commit": "ad01bf66a6153daea4a2c1561441874b46eb9004",
     "protocols": { "format": "v3", "enrolment": "v1", "sync": "v1", "ble": "v1", "store": "v1" }
   }
 }
