@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/ParkWardRR/cairn-vehicle-server/format"
 	"github.com/ParkWardRR/cairn-vehicle-server/internal/cas"
@@ -75,6 +76,86 @@ func (s *Server) relayScope(q *request, vehicle [16]byte) (int, string, bool) {
 	return http.StatusForbidden, "vehicle out of scope", false
 }
 
+// maxOffers is the effective per-client cap on outstanding offers; negative
+// means unlimited.
+func (s *Server) maxOffers() int {
+	if s.cfg.MaxOffersPerClient == 0 {
+		return DefaultMaxOffersPerClient
+	}
+	return s.cfg.MaxOffersPerClient
+}
+
+// clientOffers is one client's set of outstanding offers. The lock is per client,
+// so the cap is exact under concurrent offers without one client's slow offer
+// holding up another's.
+type clientOffers struct {
+	mu      sync.Mutex
+	bundles map[[16]byte]struct{}
+}
+
+func (s *Server) offersOf(clientID string) *clientOffers {
+	s.offerMu.Lock()
+	defer s.offerMu.Unlock()
+	c := s.offers[clientID]
+	if c == nil {
+		c = &clientOffers{bundles: map[[16]byte]struct{}{}}
+		s.offers[clientID] = c
+	}
+	return c
+}
+
+// offerAllowed reports whether the client may open a transfer for this bundle.
+// The caller holds c.mu.
+//
+// A slot is only ever spent on work that is still outstanding. A bundle the
+// client already holds is not counted twice (a phone retrying an offer must never
+// lock itself out), a content root that already has a receipt costs nothing, and
+// slots whose bundle has since been committed or swept are reclaimed here, before
+// the cap is enforced, whoever committed them. Nothing is released eagerly: a
+// slot that no longer has an outstanding offer behind it is simply not counted.
+func (s *Server) offerAllowed(c *clientOffers, bundle [16]byte, root [32]byte) bool {
+	limit := s.maxOffers()
+	if _, dup := c.bundles[bundle]; dup || limit < 0 {
+		return true
+	}
+	if len(c.bundles) >= limit {
+		for id := range c.bundles {
+			if !s.cfg.Intake.OfferOutstanding(id) {
+				delete(c.bundles, id)
+			}
+		}
+	}
+	if len(c.bundles) < limit {
+		return true
+	}
+	// Full of genuinely outstanding transfers. Only an offer that will be answered
+	// from an existing receipt, which records nothing, may pass.
+	return s.cfg.Intake.HasReceipt(root)
+}
+
+// offerWithinCap runs intake's Offer under the client's cap. tooMany means the
+// cap refused it and intake was not called, so nothing was written.
+func (s *Server) offerWithinCap(clientID string, m *format.Manifest, body, sig []byte) (res *intake.OfferResult, tooMany bool, err error) {
+	if s.maxOffers() < 0 {
+		res, err = s.cfg.Intake.Offer(body, sig)
+		return res, false, err
+	}
+	c := s.offersOf(clientID)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if !s.offerAllowed(c, m.BundleID, m.ContentRoot) {
+		return nil, true, nil
+	}
+	res, err = s.cfg.Intake.Offer(body, sig)
+	// Only an offer intake accepted and left outstanding takes a slot: a refused or
+	// forged manifest, or one answered from a receipt, wrote nothing to wait on.
+	if err == nil && res.ExistingReceipt == nil {
+		c.bundles[m.BundleID] = struct{}{}
+	}
+	return res, false, err
+}
+
 func (s *Server) handleRelayOffer(q *request) (int, string) {
 	sig, err := hex.DecodeString(strings.TrimSpace(q.r.Header.Get(SignatureHeader)))
 	if err != nil || len(sig) != 64 {
@@ -98,7 +179,14 @@ func (s *Server) handleRelayOffer(q *request) (int, string) {
 		return status, reason
 	}
 
-	result, err := s.cfg.Intake.Offer(q.body, sig)
+	// The cap is per authenticated client, so one phone cannot use up another's
+	// slots.
+	result, tooMany, err := s.offerWithinCap(q.client.ID, manifest, q.body, sig)
+	if tooMany {
+		s.writeError(q.w, http.StatusTooManyRequests, "too_many_offers",
+			"too many bundles are offered and not yet committed; commit some, then retry")
+		return http.StatusTooManyRequests, "too many outstanding offers"
+	}
 	if err != nil {
 		return s.relayFail(q, err)
 	}
@@ -241,6 +329,12 @@ func (s *Server) handleRelayReceipt(q *request) (int, string) {
 // code. The distinction that matters to the phone is retry versus stop: a
 // 4xx other than 409/429 will not succeed on retry, a quarantined bundle never
 // will, and 5xx is worth trying again later.
+//
+// Not every relay error comes through here. Two are decided by the relay itself:
+//   - 403 scope: the bundle's vehicle is outside the caller's scope.
+//   - 429 too_many_offers: the caller already has Config.MaxOffersPerClient
+//     bundles offered and not committed. Retry after committing one; unlike a
+//     refused bundle, nothing is wrong with the data.
 func (s *Server) relayFail(q *request, err error) (int, string) {
 	status, code, msg := http.StatusInternalServerError, "internal", "internal error"
 	switch {
