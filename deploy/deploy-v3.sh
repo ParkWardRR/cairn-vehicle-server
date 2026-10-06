@@ -47,7 +47,11 @@ rsync -az --delete --exclude node_modules --exclude .git --exclude 'bin/' \
 rsync -az --delete "$ROOT/deploy/" "$HOST:cairn-v3/deploy/"
 
 echo "==> building on the host (nice, -p 4)"
-ssh "$HOST" 'cd ~/cairn-v3/server && nice -n 10 make build BINDIR=bin GOFLAGS="-p=4" && nice -n 10 make build-tsdb BINDIR=bin GOFLAGS="-p=4"'
+# The source is rsynced without .git, so the host cannot work out the build identity
+# (/healthz) itself; it is taken from this checkout and passed in.
+VERSION="$(git -C "$ROOT" describe --tags --always --dirty 2>/dev/null || echo dev)"
+COMMIT="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+ssh "$HOST" "cd ~/cairn-v3/server && nice -n 10 make build BINDIR=bin GOFLAGS=-p=4 VERSION='$VERSION' COMMIT='$COMMIT' && nice -n 10 make build-tsdb BINDIR=bin GOFLAGS=-p=4 VERSION='$VERSION' COMMIT='$COMMIT'"
 
 if [ "$BUILD_ONLY" = 1 ]; then
   echo "==> built; --build-only, so nothing was installed or restarted"
