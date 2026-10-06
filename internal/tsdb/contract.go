@@ -30,12 +30,16 @@ type Capabilities struct {
 	Views         []string `json:"views"`
 	// Columns maps every table and view to its column names in order.
 	Columns map[string][]string `json:"columns"`
+	// ColumnTypes is parallel to Columns: the DuckDB type of each column, as the catalogue
+	// spells it. The schema fingerprint covers these, so a retyped column is a different
+	// schema, not an unnoticed one.
+	ColumnTypes map[string][]string `json:"column_types"`
 }
 
 // Capabilities reads the live catalogue, so it reports the store that is serving, not a
 // list that was true when someone last edited the code.
 func (d *DB) Capabilities(ctx context.Context) (Capabilities, error) {
-	c := Capabilities{StoreContract: StoreContract, Columns: map[string][]string{}}
+	c := Capabilities{StoreContract: StoreContract, Columns: map[string][]string{}, ColumnTypes: map[string][]string{}}
 
 	rows, err := d.db.QueryContext(ctx,
 		`SELECT table_name, table_type FROM information_schema.tables
@@ -73,6 +77,7 @@ func (d *DB) Capabilities(ctx context.Context) (Capabilities, error) {
 			return c, err
 		}
 		c.Columns[table] = append(c.Columns[table], col)
+		c.ColumnTypes[table] = append(c.ColumnTypes[table], typ)
 		lines = append(lines, table+"."+col+" "+typ)
 	}
 	if err := cols.Err(); err != nil {
