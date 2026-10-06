@@ -2,6 +2,6 @@
   "firmware": {
     "repo": "https://github.com/ParkWardRR/cairn-esp32-device-firmware",
     "tag": "",
-    "commit": "a3fe7ef2dd5e70c5d274ccdacb4b717b70a90dab"
+    "commit": "bad190c00dd601dfbedbb1d1a3080cacb4daa4b9"
   }
 }
