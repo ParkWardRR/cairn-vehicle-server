@@ -130,9 +130,16 @@ type Registry struct {
 	now    func() time.Time
 }
 
+// Option configures a Registry.
+type Option func(*Registry)
+
+// WithClock replaces the time source, so a test or a vector generator gets
+// reproducible assignment and archive times.
+func WithClock(now func() time.Time) Option { return func(r *Registry) { r.now = now } }
+
 // Open loads the registry at path. vinKeyPath holds the 32-byte key that seals
 // VINs; it is created (mode 0600) when absent.
-func Open(path, vinKeyPath string) (*Registry, error) {
+func Open(path, vinKeyPath string, opts ...Option) (*Registry, error) {
 	store, err := jsonstore.Open(path, func() document { return document{} })
 	if err != nil {
 		return nil, err
@@ -141,7 +148,11 @@ func Open(path, vinKeyPath string) (*Registry, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Registry{store: store, vinKey: key, now: func() time.Time { return time.Now().UTC() }}, nil
+	r := &Registry{store: store, vinKey: key, now: func() time.Time { return time.Now().UTC() }}
+	for _, o := range opts {
+		o(r)
+	}
+	return r, nil
 }
 
 func loadOrCreateKey(path string) ([32]byte, error) {
