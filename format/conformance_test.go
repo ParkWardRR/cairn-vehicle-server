@@ -259,6 +259,7 @@ type vectorExpectation struct {
 	} `json:"manifest"`
 
 	Receipt *struct {
+		ParseError         string `json:"parse_error"`
 		SignatureValid     bool   `json:"signature_valid"`
 		Acknowledges       bool   `json:"acknowledges_uploaded_root"`
 		UploadedRootHex    string `json:"uploaded_content_root_hex"`
@@ -371,7 +372,7 @@ func TestConformanceVectors(t *testing.T) {
 			case exp.Scan != nil:
 				checkScanVector(t, dir, &exp)
 			case exp.Header != nil:
-				checkHeaderVector(t, dir)
+				checkHeaderVector(t, dir, exp.Header.ParseError)
 			case exp.Manifest != nil:
 				checkManifestVector(t, dir, &exp)
 				if exp.Binding != nil {
@@ -463,7 +464,7 @@ func checkScanVector(t *testing.T, dir string, exp *vectorExpectation) {
 	}
 }
 
-func checkHeaderVector(t *testing.T, dir string) {
+func checkHeaderVector(t *testing.T, dir, parseError string) {
 	t.Helper()
 
 	b, err := os.ReadFile(filepath.Join(dir, "segment.bin"))
@@ -471,8 +472,34 @@ func checkHeaderVector(t *testing.T, dir string) {
 		t.Fatalf("read segment.bin: %v", err)
 	}
 
-	if _, err := ScanSegment(b, ScanState{}, nil); err == nil {
-		t.Error("expected a header parse error, got none")
+	// Refused with or without a key, and for the stated reason: a corrupt header
+	// must never be reported as, say, an authentication failure.
+	for _, keyed := range []bool{false, true} {
+		var p KeyProvider
+		if keyed {
+			p = vectorKeys(t)
+		}
+		_, err := ScanSegment(b, ScanState{}, p)
+		switch parseError {
+		case "bad_header_crc":
+			if !errors.Is(err, ErrBadHeaderCRC) {
+				t.Errorf("keyed=%v: got %v, want a header CRC error", keyed, err)
+			}
+		case "bad_magic":
+			if !errors.Is(err, ErrBadMagic) {
+				t.Errorf("keyed=%v: got %v, want a bad magic error", keyed, err)
+			}
+		case "short_header":
+			if !errors.Is(err, ErrShortHeader) {
+				t.Errorf("keyed=%v: got %v, want a short header error", keyed, err)
+			}
+		case "unsupported_format_version":
+			if err == nil || !strings.Contains(err.Error(), "unsupported format version") {
+				t.Errorf("keyed=%v: got %v, want an unsupported format version error", keyed, err)
+			}
+		default:
+			t.Fatalf("unrecognised parse_error %q", parseError)
+		}
 	}
 }
 
@@ -497,6 +524,9 @@ func checkManifestVector(t *testing.T, dir string, exp *vectorExpectation) {
 	m, parseErr := ParseManifest(encoded)
 	if exp.Manifest.Valid && parseErr != nil {
 		t.Fatalf("ParseManifest: %v", parseErr)
+	}
+	if !exp.Manifest.Valid && parseErr == nil {
+		t.Fatal("manifest parsed but the vector says it is invalid")
 	}
 
 	_, verifyErr := VerifyManifest(encoded, sig, ed25519.PublicKey(pub))
@@ -551,6 +581,10 @@ func checkReceiptVector(t *testing.T, dir string, exp *vectorExpectation) {
 	}
 
 	r, err := ParseReceipt(encoded)
+	if exp.Receipt.ParseError != "" {
+		checkReceiptRefusedAtParse(t, exp.Receipt.ParseError, err)
+		return
+	}
 	if err != nil {
 		t.Fatalf("ParseReceipt: %v", err)
 	}
@@ -576,6 +610,31 @@ func checkReceiptVector(t *testing.T, dir string, exp *vectorExpectation) {
 	}
 	if !exp.Receipt.Acknowledges && ackErr == nil {
 		t.Error("receipt accepted as an acknowledgement but the vector expects rejection")
+	}
+}
+
+// checkReceiptRefusedAtParse checks that a receipt is refused before any signature
+// is considered, and for the stated reason.
+func checkReceiptRefusedAtParse(t *testing.T, parseError string, err error) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("receipt parsed but the vector expects it refused as %s", parseError)
+	}
+	var ok bool
+	switch parseError {
+	case "unsupported_version":
+		ok = strings.Contains(err.Error(), "unsupported receipt_version")
+	case "non_canonical":
+		ok = errors.Is(err, ErrNonCanonical)
+	case "truncated":
+		ok = errors.Is(err, ErrCBORTruncated)
+	case "trailing_bytes":
+		ok = strings.Contains(err.Error(), "trailing byte")
+	default:
+		t.Fatalf("unrecognised parse_error %q", parseError)
+	}
+	if !ok {
+		t.Errorf("refused, but as %v, want %s", err, parseError)
 	}
 }
 

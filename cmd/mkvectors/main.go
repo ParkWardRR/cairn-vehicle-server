@@ -17,6 +17,7 @@
 // never be provisioned onto a device or loaded into a real keystore.
 //
 //	go run ./cmd/mkvectors                       # into $CAIRN_CONTRACTS/format/v3/vectors
+//	                                             # and enrolment/v1/vectors/negative.json
 package main
 
 import (
@@ -138,6 +139,10 @@ type manifestExpectation struct {
 }
 
 type receiptExpectation struct {
+	// ParseError, when set, says the receipt bytes themselves must be refused,
+	// before any signature is considered. The remaining fields then only say that
+	// nothing here acknowledges the upload.
+	ParseError         string `json:"parse_error,omitempty"`
 	SignatureValid     bool   `json:"signature_valid"`
 	Acknowledges       bool   `json:"acknowledges_uploaded_root"`
 	UploadedRootHex    string `json:"uploaded_content_root_hex"`
@@ -209,12 +214,17 @@ type obdExtExpectation struct {
 
 func main() {
 	out := flag.String("out", "", "output directory for the vectors (default: $CAIRN_CONTRACTS/format/v3/vectors)")
+	enrolOut := flag.String("enrolment-out", "", "output directory for the enrolment negative vectors "+
+		"(default: $CAIRN_CONTRACTS/enrolment/v1/vectors, or none when -out is given)")
 	flag.Parse()
 	if *out == "" {
 		*out = contracts.Vectors("format", "v3")
+		if *enrolOut == "" {
+			*enrolOut = contracts.Vectors("enrolment", "v1")
+		}
 	}
 
-	if err := run(*out); err != nil {
+	if err := run(*out, *enrolOut); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -224,7 +234,7 @@ type builder struct {
 	fn   func(string, ed25519.PrivateKey, ed25519.PrivateKey) error
 }
 
-func run(outDir string) error {
+func run(outDir, enrolmentDir string) error {
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return err
 	}
@@ -268,6 +278,34 @@ func run(outDir string) error {
 		{"obd-extended", vectorOBDExtended},
 		{"update-descriptor-valid", vectorUpdateDescriptorValid},
 		{"update-descriptor-bad-signature", vectorUpdateDescriptorBadSignature},
+
+		// Negative vectors: see vectors_negative.go.
+		{"header-bad-magic", vectorHeaderBadMagic},
+		{"header-unsupported-format-version", vectorHeaderUnsupportedVersion},
+		{"header-short", vectorHeaderShort},
+		{"frame-header-tampered", vectorFrameHeaderTampered},
+		{"manifest-tampered-body", vectorManifestTamperedBody},
+		{"manifest-wrong-device-key", vectorManifestWrongDeviceKey},
+		{"manifest-unsupported-version", vectorManifestUnsupportedVersion},
+		{"manifest-non-canonical", vectorManifestNonCanonical},
+		{"manifest-missing-mandatory-field", vectorManifestMissingField},
+		{"manifest-device-id-mismatch", vectorBindingDeviceID},
+		{"manifest-boot-id-mismatch", vectorBindingBootID},
+		{"manifest-vehicle-id-mismatch", vectorBindingVehicleID},
+		{"manifest-device-counter-mismatch", vectorBindingDeviceCounter},
+		{"manifest-key-version-mismatch", vectorBindingKeyVersion},
+		{"manifest-segment-index-mismatch", vectorBindingSegmentIndex},
+		{"manifest-journal-index-mismatch", vectorBindingJournalIndex},
+		{"manifest-segment-gap", vectorBindingSegmentGap},
+		{"receipt-bad-signature", vectorReceiptBadSignature},
+		{"receipt-wrong-server-key", vectorReceiptWrongServerKey},
+		{"receipt-tampered-content-root", vectorReceiptTamperedRoot},
+		{"receipt-unsupported-version", vectorReceiptUnsupportedVersion},
+		{"receipt-non-canonical", vectorReceiptNonCanonical},
+		{"receipt-truncated", vectorReceiptTruncated},
+		{"receipt-trailing-bytes", vectorReceiptTrailingBytes},
+		{"update-descriptor-wrong-key", vectorUpdateDescriptorWrongKey},
+		{"update-descriptor-tampered-body", vectorUpdateDescriptorTamperedBody},
 	}
 
 	for _, b := range builders {
@@ -279,6 +317,12 @@ func run(outDir string) error {
 
 	if err := writeKeys(outDir); err != nil {
 		return err
+	}
+
+	if enrolmentDir != "" {
+		if err := writeEnrolmentNegatives(enrolmentDir); err != nil {
+			return fmt.Errorf("enrolment negatives: %w", err)
+		}
 	}
 
 	if err := writeIndex(outDir, len(builders)); err != nil {
