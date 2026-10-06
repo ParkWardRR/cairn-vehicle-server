@@ -5,11 +5,11 @@ vehicle, over the USB console, with nothing secret on the SD card, nothing secre
 the clear on any wire, and **no network credential of any kind on the device**.
 
 The dongle has no Wi-Fi and no TLS client: sealed bundles leave it over BLE, carried
-by the enrolled phone ([ble-offload.md](../contracts/ble/v1/offload.md)). So there is no SSID, no
+by the enrolled phone ([ble-offload.md](https://github.com/ParkWardRR/Cairn/blob/main/contracts/ble/v1/offload.md)). So there is no SSID, no
 password, no client certificate and no transport private key to provision. What is
 provisioned is small and none of it is a secret the chip must keep.
 
-Context: [trust-model-v3.md](trust-model-v3.md) §3.3 and §4.1. Code:
+Context: [trust-model-v3.md](https://github.com/ParkWardRR/Cairn/blob/main/docs/trust-model-v3.md) §3.3 and §4.1. Code:
 `firmware/cairn-v2/lib/cairn_prov`, `firmware/cairn-v2/src/prov_console.cpp`,
 `server/internal/enroll`, `server/cmd/cairn-admin` (`device enroll`),
 `server/cmd/cairn-provision`. Public test vectors: `contracts/enrolment/v1/vectors/`.
@@ -50,7 +50,7 @@ network private key must not also live there, and no longer does.
 ## The wire format
 
 The sealed blob, its fingerprint and the console protocol are specified in
-[contracts/enrolment/v1/spec.md](../contracts/enrolment/v1/spec.md). In short: the device
+[contracts/enrolment/v1/spec.md](https://github.com/ParkWardRR/Cairn/blob/main/contracts/enrolment/v1/spec.md). In short: the device
 seals its storage root to the server's enrolment key, signs the result, and prints it on
 request; the operator's workstation relays it to `cairn-admin device enroll`, which refuses
 anything it cannot verify, then installs the vehicle assignment and counter floor over the
@@ -87,7 +87,7 @@ All values are placeholders. Run on the workstation the dongle is plugged into.
 4. **Check** with `cairn-provision --port … --reset --monitor 12`: the boot log
    should say `an assignment is installed`.
 5. **Pair the phone** (BLE passkey) and let the app offload; see
-   [ble-offload.md](../contracts/ble/v1/offload.md).
+   [ble-offload.md](https://github.com/ParkWardRR/Cairn/blob/main/contracts/ble/v1/offload.md).
 
 `cairn-admin device enroll` refuses, before writing anything: a blob whose
 signature does not verify, a fingerprint that does not match, a device id

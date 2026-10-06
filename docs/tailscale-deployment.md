@@ -1,7 +1,7 @@
 # Tailscale deployment
 
 Remote access for the iOS app, with no public exposure. Read
-[trust-model-v3.md](trust-model-v3.md) §1 first: **Tailscale here is
+[trust-model-v3.md](https://github.com/ParkWardRR/Cairn/blob/main/docs/trust-model-v3.md) §1 first: **Tailscale here is
 reachability, not authorization.** The app still needs its own enrolled
 identity, and the dongle never touches the Tailnet.
 
@@ -20,7 +20,7 @@ iPhone ── LAN Wi-Fi ───────────► https://cairn.examp
 Dongle ── BLE ──► iPhone ──(either path above)──► relay endpoints on the app listener
 ```
 
-The dongle has no Wi-Fi: the phone carries its bundles ([ble-offload.md](../contracts/ble/v1/offload.md)),
+The dongle has no Wi-Fi: the phone carries its bundles ([ble-offload.md](https://github.com/ParkWardRR/Cairn/blob/main/contracts/ble/v1/offload.md)),
 so the Tailnet path above also carries trip uploads. The legacy `:8443` device listener
 is no longer used by any dongle and is retired once the relay is proven (Cairn #7).
 
