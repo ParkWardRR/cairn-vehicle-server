@@ -161,7 +161,7 @@ func TestPeriodSummary(t *testing.T) {
 		{"custom 10 Feb to 28 Feb inclusive", "2026-02-10", "2026-03-01", 1, 1},
 		{"custom ending the day a trip starts", "2026-03-01", "2026-03-31", 0, 0},
 		{"the first instant of 2026 is in", "2026-01-01", "2026-01-02", 1, 0},
-		{"the last instant of 2025 is out", "2025-12-31", "2026-01-01", 1, 0},
+		{"a trip at 23:59:50 is in the day it started", "2025-12-31", "2026-01-01", 1, 0},
 		{"empty range", "2027-01-01", "2027-02-01", 0, 0},
 		{"inverted range", "2026-04-01", "2026-01-01", 0, 0},
 	} {
