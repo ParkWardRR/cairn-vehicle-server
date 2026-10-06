@@ -30,3 +30,6 @@ deploy/.srl
 .env
 .env.*
 !.env.example
+
+# The pinned firmware checkout (tests/interop/run.sh)
+/.interop/

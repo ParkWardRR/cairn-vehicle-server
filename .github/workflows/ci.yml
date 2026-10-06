@@ -102,3 +102,46 @@ jobs:
       - name: Stop the database
         if: always()
         run: tests/ci/postgis.sh stop
+
+  # Server crash during commit: a request is either un-receipted or durably recoverable,
+  # a retry converges to exactly one receipt, and a rotated signing key cannot induce a
+  # prune. Uses only this repository's own code.
+  crash-recovery:
+    runs-on: [self-hosted, cairn]
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 20
+    needs: [build]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Crash during commit
+        run: PORT=18701 tests/server-crash-during-commit.sh 4
+
+  # Interop: this server against the firmware's own code, built from the firmware revision
+  # pinned in interop.lock. REQUIRED: a server change that breaks the firmware, or a pin
+  # that no longer works with the server, fails here, in the repository that caused it.
+  # (The firmware repository runs the same script against this repository's main on a
+  # schedule, as a diagnostic.)
+  interop:
+    runs-on: [self-hosted, cairn]
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 45
+    needs: [build]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Offload end-to-end and the emulator's protocol fault matrix
+        run: tests/interop/run.sh

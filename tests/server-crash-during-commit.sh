@@ -18,6 +18,9 @@
 #      the interesting window is narrow.
 #
 # Usage: tests/server-crash-during-commit.sh [iterations]
+#
+# It uses only this repository's own code (cairn-server, cairn-admin, cairn-syncdemo): no
+# firmware or emulator is involved, so it runs in this repository's CI, not in interop.
 
 set -uo pipefail
 
@@ -25,7 +28,7 @@ ITERATIONS="${1:-6}"
 PORT="${PORT:-18600}"
 BASE="http://127.0.0.1:${PORT}"
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # this repository's root
 WORK="$(mktemp -d)"
 DATA="${WORK}/data"
 SERVER_BIN="${WORK}/cairn-server"
@@ -85,10 +88,10 @@ count_receipts() {
 }
 
 echo "building"
-( cd "${REPO_ROOT}/server" && go build -o "${SERVER_BIN}" ./cmd/cairn-server ) || fail "server build"
-( cd "${REPO_ROOT}/server" && go build -o "${SYNC_BIN}" ./cmd/cairn-syncdemo ) || fail "syncdemo build"
+( cd "${REPO_ROOT}" && go build -o "${SERVER_BIN}" ./cmd/cairn-server ) || fail "server build"
+( cd "${REPO_ROOT}" && go build -o "${SYNC_BIN}" ./cmd/cairn-syncdemo ) || fail "syncdemo build"
 ADMIN_BIN="${WORK}/cairn-admin"
-( cd "${REPO_ROOT}/server" && go build -o "${ADMIN_BIN}" ./cmd/cairn-admin ) || fail "admin build"
+( cd "${REPO_ROOT}" && go build -o "${ADMIN_BIN}" ./cmd/cairn-admin ) || fail "admin build"
 
 IDENTITY="$("${SYNC_BIN}" -print-identity)"
 PUBKEY="$(awk '/^public_key/{print $2}' <<<"${IDENTITY}")"
