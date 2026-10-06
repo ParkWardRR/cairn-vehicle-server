@@ -27,10 +27,13 @@ func TestDumpWritesALoadableSchema(t *testing.T) {
 			t.Errorf("no table %s", n)
 		}
 	}
-	for _, n := range []string{"v_drive_summary", "v_telemetry", "v_vehicles", "v_trim_map", "v_pulls", "v_speed_agreement", "v_boost_curve", "v_reproducibility"} {
+	for _, n := range []string{"v_drive_summary", "v_telemetry", "v_vehicles", "v_trim_map", "v_pulls", "v_speed_agreement", "v_boost_curve", "v_reproducibility", "v_trip_summary", "v_trip_period"} {
 		if _, ok := s.Views[n]; !ok {
 			t.Errorf("no view %s", n)
 		}
+	}
+	if m, ok := s.Macros["period_summary"]; !ok || len(m.Parameters) != 2 || len(m.Columns) == 0 {
+		t.Errorf("no usable period_summary macro: %+v", s.Macros)
 	}
 	if got := storeschema.Compare(s, s); len(got) != 0 {
 		t.Fatal(got)
