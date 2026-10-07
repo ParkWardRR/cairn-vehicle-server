@@ -11,9 +11,11 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/audit"
 	"github.com/ParkWardRR/cairn-vehicle-server/internal/clients"
 	"github.com/ParkWardRR/cairn-vehicle-server/internal/engine"
 	"github.com/ParkWardRR/cairn-vehicle-server/internal/insight"
@@ -27,6 +29,9 @@ type LocalConfig struct {
 	// Clients is the app-client registry the web layer mints phone invitations in. Nil
 	// answers 503 on that route.
 	Clients *clients.Registry
+
+	// Audit is the app API's audit log, read for the dashboard's activity feed. Nil answers 503.
+	Audit *audit.Log
 
 	// Engines supplies the engine profile each vehicle is served with. Nil serves none.
 	Engines *engine.Catalog
@@ -91,6 +96,9 @@ func NewLocalHandler(cfg LocalConfig) http.Handler {
 	mux.HandleFunc("PUT /v1/local/vehicles/{id}/tunes/{tune}", l.guard(true, l.updateTune))
 	mux.HandleFunc("DELETE /v1/local/vehicles/{id}/tunes/{tune}", l.guard(true, l.deleteTune))
 	mux.HandleFunc("POST /v1/local/clients/invite", l.guard(true, l.inviteClient))
+	mux.HandleFunc("GET /v1/local/clients", l.authedRead(l.listClients))
+	mux.HandleFunc("POST /v1/local/clients/{id}/revoke", l.guard(true, l.revokeClient))
+	mux.HandleFunc("GET /v1/local/activity", l.authedRead(l.activity))
 	return mux
 }
 
@@ -129,6 +137,30 @@ func (l *local) guard(write bool, h func(http.ResponseWriter, *http.Request)) ht
 				localError(w, http.StatusUnsupportedMediaType, "bad_content_type", "send application/json")
 				return
 			}
+		}
+		h(w, r)
+	}
+}
+
+// authedRead guards a read of something more sensitive than display data (who is enrolled, who
+// asked for what): the same loopback and proxy refusals, and the shared token, but no JSON body.
+func (l *local) authedRead(h func(http.ResponseWriter, *http.Request)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(HeaderFunnel) != "" || r.Header.Get(HeaderTailscaleLogin) != "" ||
+			r.Header.Get(HeaderTailscaleName) != "" {
+			http.Error(w, "this endpoint is for local processes only", http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		if l.cfg.WriteToken == "" {
+			localError(w, http.StatusForbidden, "writes_disabled", "this server was started without a local token")
+			return
+		}
+		got, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if !ok || subtle.ConstantTimeCompare([]byte(got), []byte(l.cfg.WriteToken)) != 1 {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="cairn-local"`)
+			localError(w, http.StatusUnauthorized, "unauthenticated", "a valid local token is required")
+			return
 		}
 		h(w, r)
 	}
@@ -477,4 +509,131 @@ func (l *local) inviteClient(w http.ResponseWriter, r *http.Request) {
 		"vehicles":   inv.Vehicles,
 		"expires_at": inv.ExpiresAt,
 	})
+}
+
+// clientJSON is an enrolled phone as the dashboard sees it: who, how far it may reach, whether it
+// still works, and when it was last seen. Never the public key, only its short fingerprint.
+type clientJSON struct {
+	ID            string    `json:"id"`
+	Name          string    `json:"name"`
+	Role          string    `json:"role"`
+	Vehicles      []string  `json:"vehicles"`
+	KeyID         string    `json:"key_id"`
+	Status        string    `json:"status"`
+	EnrolledAt    time.Time `json:"enrolled_at"`
+	RevokedAt     time.Time `json:"revoked_at,omitzero"`
+	RevokedReason string    `json:"revoked_reason,omitempty"`
+	LastSeenAt    time.Time `json:"last_seen_at,omitzero"`
+	LastTransport string    `json:"last_transport,omitempty"`
+}
+
+func (l *local) listClients(w http.ResponseWriter, _ *http.Request) {
+	if l.cfg.Clients == nil {
+		localError(w, http.StatusServiceUnavailable, "unavailable", "this server has no client registry")
+		return
+	}
+	out := []clientJSON{}
+	for _, c := range l.cfg.Clients.List() {
+		out = append(out, clientJSON{
+			ID: c.ID, Name: c.Name, Role: string(c.Role), Vehicles: c.Vehicles, KeyID: c.KeyID, Status: c.Status,
+			EnrolledAt: c.EnrolledAt, RevokedAt: c.RevokedAt, RevokedReason: c.RevokedReason,
+			LastSeenAt: c.LastSeenAt, LastTransport: c.LastTransport,
+		})
+	}
+	localJSON(w, http.StatusOK, map[string]any{"clients": out})
+}
+
+type revokeClientRequest struct {
+	Reason string `json:"reason"`
+	Actor  string `json:"actor"`
+}
+
+// revokeClient disables a phone at once: its next request, and any bearer token it holds, is
+// refused. The reason is shortened and tagged with who asked, as the registry keeps it for years.
+func (l *local) revokeClient(w http.ResponseWriter, r *http.Request) {
+	if l.cfg.Clients == nil {
+		localError(w, http.StatusServiceUnavailable, "unavailable", "this server has no client registry")
+		return
+	}
+	var in revokeClientRequest
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxLocalBody))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&in); err != nil {
+		localError(w, http.StatusBadRequest, "bad_request", "the body must be JSON with optional reason and actor")
+		return
+	}
+	id := strings.ToLower(r.PathValue("id"))
+	if !vehicleIDPattern.MatchString(id) {
+		localError(w, http.StatusBadRequest, "bad_request", "the client id is 32 hex characters")
+		return
+	}
+	reason := strings.Join(strings.Fields(in.Reason), " ")
+	if reason == "" {
+		reason = "revoked from the dashboard"
+	}
+	if actor := strings.TrimSpace(in.Actor); actor != "" {
+		reason += " (" + actor + ")"
+	}
+	if runes := []rune(reason); len(runes) > 120 {
+		reason = string(runes[:120])
+	}
+	if err := l.cfg.Clients.Revoke(id, reason); err != nil {
+		if errors.Is(err, clients.ErrUnknownClient) {
+			localError(w, http.StatusNotFound, "not_found", "no such phone")
+			return
+		}
+		l.cfg.Log.Error("client revoke failed", "error", err)
+		localError(w, http.StatusInternalServerError, "internal", "the phone could not be revoked")
+		return
+	}
+	localJSON(w, http.StatusOK, map[string]any{"revoked": id})
+}
+
+// activityJSON is one audited request, as much as a person needs and no more: no body hash, no
+// Tailscale login.
+type activityJSON struct {
+	Time      time.Time `json:"ts"`
+	ActorType string    `json:"actor_type"`
+	ClientID  string    `json:"client_id,omitempty"`
+	Transport string    `json:"transport,omitempty"`
+	Route     string    `json:"route"`
+	TargetID  string    `json:"target_id,omitempty"`
+	Status    int       `json:"status"`
+	Reason    string    `json:"reason,omitempty"`
+}
+
+// activity lists the last days of audited requests, newest first, without the health probes that
+// would drown them (the deploy check and the apps ask every few minutes).
+func (l *local) activity(w http.ResponseWriter, r *http.Request) {
+	if l.cfg.Audit == nil {
+		localError(w, http.StatusServiceUnavailable, "unavailable", "this server has no audit log")
+		return
+	}
+	days, limit := queryInt(r, "days", 7, 1, 31), queryInt(r, "limit", 300, 1, 1000)
+	entries, err := l.cfg.Audit.Recent(days, limit, func(e audit.Entry) bool { return e.Route == "GET /v1/health" })
+	if err != nil {
+		l.cfg.Log.Error("audit read failed", "error", err)
+		localError(w, http.StatusInternalServerError, "internal", "the activity could not be read")
+		return
+	}
+	out := make([]activityJSON, 0, len(entries))
+	for _, e := range entries {
+		id := e.ClientID
+		if id == "" {
+			id = e.ActorID
+		}
+		out = append(out, activityJSON{
+			Time: e.Time, ActorType: e.ActorType, ClientID: id, Transport: e.Transport,
+			Route: e.Route, TargetID: e.TargetID, Status: e.Status, Reason: e.Reason,
+		})
+	}
+	localJSON(w, http.StatusOK, map[string]any{"activity": out})
+}
+
+func queryInt(r *http.Request, name string, def, lo, hi int) int {
+	n, err := strconv.Atoi(r.URL.Query().Get(name))
+	if err != nil {
+		return def
+	}
+	return min(max(n, lo), hi)
 }

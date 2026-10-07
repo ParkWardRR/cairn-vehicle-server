@@ -229,7 +229,7 @@ func startApp(f appFlags, cfg runConfig, deviceReg *devices.Registry, vehicleReg
 	var servers []*http.Server
 	if f.localAddr != "" {
 		srv := &http.Server{Addr: f.localAddr, Handler: syncapi.NewLocalHandler(syncapi.LocalConfig{
-			Vehicles: vehicleReg, Clients: clientReg, Engines: engines, StoreURL: f.snapshotURL, WriteToken: localToken, Log: log}),
+			Vehicles: vehicleReg, Clients: clientReg, Audit: auditLog, Engines: engines, StoreURL: f.snapshotURL, WriteToken: localToken, Log: log}),
 			ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second}
 		serve(srv, false)
 		servers = append(servers, srv)

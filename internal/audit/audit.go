@@ -197,6 +197,46 @@ func (l *Log) Read() ([]Entry, error) {
 	return out, nil
 }
 
+// Recent returns the entries of the last `days` UTC days (today included), newest first, at most
+// `limit` of them, skipping any for which `skip` returns true. It reads only those day files, so
+// it stays cheap as years of history accumulate, which is what a screen needs and `Read` is not for.
+// A corrupt line is an error, as in `Read`.
+func (l *Log) Recent(days, limit int, skip func(Entry) bool) ([]Entry, error) {
+	if days < 1 {
+		days = 1
+	}
+	today := l.now().UTC()
+	var out []Entry
+	for back := 0; back < days; back++ {
+		name := filepath.Join(l.dir, "audit-"+today.AddDate(0, 0, -back).Format("2006-01-02")+".jsonl")
+		raw, err := os.ReadFile(name)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("audit: read %s: %w", filepath.Base(name), err)
+		}
+		lines := strings.Split(string(raw), "\n")
+		for i := len(lines) - 1; i >= 0; i-- {
+			if lines[i] == "" {
+				continue
+			}
+			var e Entry
+			if err := json.Unmarshal([]byte(lines[i]), &e); err != nil {
+				return nil, fmt.Errorf("audit: %s line %d: %w", filepath.Base(name), i+1, err)
+			}
+			if skip != nil && skip(e) {
+				continue
+			}
+			out = append(out, e)
+			if limit > 0 && len(out) >= limit {
+				return out, nil
+			}
+		}
+	}
+	return out, nil
+}
+
 // sanitizeReason reduces a reason to a short machine code. Anything outside a
 // conservative alphabet becomes '_', so an error string passed by mistake
 // cannot smuggle structure, whitespace or long secrets into the file.
