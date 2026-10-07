@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/clients"
 	"github.com/ParkWardRR/cairn-vehicle-server/internal/engine"
 	"github.com/ParkWardRR/cairn-vehicle-server/internal/insight"
 	"github.com/ParkWardRR/cairn-vehicle-server/internal/vehicles"
@@ -22,6 +23,10 @@ import (
 // LocalConfig configures the local listener's handler.
 type LocalConfig struct {
 	Vehicles *vehicles.Registry
+
+	// Clients is the app-client registry the web layer mints phone invitations in. Nil
+	// answers 503 on that route.
+	Clients *clients.Registry
 
 	// Engines supplies the engine profile each vehicle is served with. Nil serves none.
 	Engines *engine.Catalog
@@ -64,6 +69,10 @@ func LocalHandler(reg *vehicles.Registry) http.Handler {
 // minutes before it calls a write route, and records who asked. This handler records the
 // actor it was told, never decides it.
 //
+// A phone invitation is the one other thing it writes (POST /v1/local/clients/invite), under
+// the same token and the same rule: the web layer asks for a fresh passkey first. It only ever
+// makes a *user* client; an admin client stays a deliberate act with cairn-admin on the host.
+//
 // What it returns is display data only: id, name, engine code and profile, tune records,
 // archived. Never the VIN, sealed or otherwise, and never an assignment or a device id.
 func NewLocalHandler(cfg LocalConfig) http.Handler {
@@ -81,6 +90,7 @@ func NewLocalHandler(cfg LocalConfig) http.Handler {
 	mux.HandleFunc("POST /v1/local/vehicles/{id}/tunes", l.guard(true, l.addTune))
 	mux.HandleFunc("PUT /v1/local/vehicles/{id}/tunes/{tune}", l.guard(true, l.updateTune))
 	mux.HandleFunc("DELETE /v1/local/vehicles/{id}/tunes/{tune}", l.guard(true, l.deleteTune))
+	mux.HandleFunc("POST /v1/local/clients/invite", l.guard(true, l.inviteClient))
 	return mux
 }
 
@@ -409,4 +419,62 @@ func statsFromRows(cols []string, rows [][]any) ([]insight.Stat, error) {
 		out = append(out, st)
 	}
 	return out, nil
+}
+
+// maxLocalInviteTTL is the longest invitation the web layer may ask for. The admin CLI allows
+// more (clients.MaxInviteTTL); a code that is shown on a screen or turned into a QR code
+// should not stay valid for a day.
+const maxLocalInviteTTL = time.Hour
+
+type inviteRequest struct {
+	Name       string   `json:"name"`
+	Vehicles   []string `json:"vehicles"`
+	TTLSeconds int      `json:"ttl_seconds"`
+	Actor      string   `json:"actor"`
+}
+
+// inviteClient mints a single-use invitation for a new user client. The code is returned
+// once; the registry keeps only its hash. created_by records the actor the web layer
+// reported, which is a label for people, not an identity this server verified.
+func (l *local) inviteClient(w http.ResponseWriter, r *http.Request) {
+	if l.cfg.Clients == nil {
+		localError(w, http.StatusServiceUnavailable, "unavailable", "this server has no client registry")
+		return
+	}
+	var in inviteRequest
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxLocalBody))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&in); err != nil {
+		localError(w, http.StatusBadRequest, "bad_request", "the body must be JSON with optional name, vehicles, ttl_seconds and actor")
+		return
+	}
+	ttl := time.Duration(in.TTLSeconds) * time.Second
+	if in.TTLSeconds < 0 || ttl > maxLocalInviteTTL {
+		localError(w, http.StatusBadRequest, "bad_request", "ttl_seconds must be between 0 and 3600")
+		return
+	}
+	if len(in.Vehicles) == 0 {
+		in.Vehicles = []string{clients.ScopeAll}
+	}
+	actor := strings.TrimSpace(in.Actor)
+	if len([]rune(actor)) > 64 {
+		actor = string([]rune(actor)[:64])
+	}
+	createdBy := "web ui"
+	if actor != "" {
+		createdBy += ": " + actor
+	}
+	code, inv, err := l.cfg.Clients.CreateInvite(clients.InviteSpec{
+		Role: clients.RoleUser, Vehicles: in.Vehicles, Name: in.Name, CreatedBy: createdBy, TTL: ttl,
+	})
+	if err != nil {
+		localError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	localJSON(w, http.StatusCreated, map[string]any{
+		"code":       clients.FormatCode(code),
+		"role":       string(inv.Role),
+		"vehicles":   inv.Vehicles,
+		"expires_at": inv.ExpiresAt,
+	})
 }

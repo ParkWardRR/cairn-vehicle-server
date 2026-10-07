@@ -5,6 +5,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/clients"
 )
 
 func TestLocalHandlerListsDisplayDataOnly(t *testing.T) {
@@ -58,5 +61,83 @@ func TestLocalHandlerRefusesAnythingThatWasProxied(t *testing.T) {
 	}
 	if resp, _ := http.Get(srv.URL + "/v1/sync/pull"); resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("an app route answered on the local listener: %d", resp.StatusCode)
+	}
+}
+
+func postInvite(t *testing.T, url, token, body string) *http.Response {
+	t.Helper()
+	req, _ := http.NewRequest("POST", url+"/v1/local/clients/invite", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
+func TestLocalInviteMintsAUserInvitationThatEnrolsAPhone(t *testing.T) {
+	e := newEnv(t)
+	srv := httptest.NewServer(NewLocalHandler(LocalConfig{Vehicles: e.vehicles, Clients: e.clients, WriteToken: "tok"}))
+	defer srv.Close()
+
+	resp := postInvite(t, srv.URL, "tok", `{"name":"Sam's iPhone","ttl_seconds":600,"actor":"passkey"}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("invite: %d %s", resp.StatusCode, readBody(resp))
+	}
+	var out struct {
+		Code      string    `json:"code"`
+		Role      string    `json:"role"`
+		Vehicles  []string  `json:"vehicles"`
+		ExpiresAt time.Time `json:"expires_at"`
+	}
+	mustDecode(t, resp, &out)
+	if out.Role != "user" || len(out.Vehicles) != 1 || out.Vehicles[0] != clients.ScopeAll {
+		t.Fatalf("invitation is %s for %v, want a user for every vehicle", out.Role, out.Vehicles)
+	}
+	if d := out.ExpiresAt.Sub(e.clock()); d < 9*time.Minute || d > 11*time.Minute {
+		t.Fatalf("expires in %s, want about the 10 minutes asked for", d)
+	}
+
+	// The shown code enrols a phone, which is a user and so cannot administer anything.
+	phone := e.enrolWithCode(out.Code, "Sam's iPhone")
+	if r := phone.do("GET", "/v1/clients", nil); r.StatusCode != http.StatusForbidden {
+		t.Fatalf("the invited phone can list clients: %d", r.StatusCode)
+	}
+}
+
+func TestLocalInviteIsGuardedAndBounded(t *testing.T) {
+	e := newEnv(t)
+	srv := httptest.NewServer(NewLocalHandler(LocalConfig{Vehicles: e.vehicles, Clients: e.clients, WriteToken: "tok"}))
+	defer srv.Close()
+
+	if r := postInvite(t, srv.URL, "", `{}`); r.StatusCode != http.StatusUnauthorized {
+		t.Errorf("no token: %d, want 401", r.StatusCode)
+	}
+	if r := postInvite(t, srv.URL, "wrong", `{}`); r.StatusCode != http.StatusUnauthorized {
+		t.Errorf("wrong token: %d, want 401", r.StatusCode)
+	}
+	for name, body := range map[string]string{
+		"an admin role":     `{"role":"admin"}`,
+		"a day":             `{"ttl_seconds":86400}`,
+		"a negative ttl":    `{"ttl_seconds":-1}`,
+		"a malformed scope": `{"vehicles":["not a vehicle id"]}`,
+	} {
+		if r := postInvite(t, srv.URL, "tok", body); r.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s: %d, want 400", name, r.StatusCode)
+		}
+	}
+
+	noWrites := httptest.NewServer(NewLocalHandler(LocalConfig{Vehicles: e.vehicles, Clients: e.clients}))
+	defer noWrites.Close()
+	if r := postInvite(t, noWrites.URL, "tok", `{}`); r.StatusCode != http.StatusForbidden {
+		t.Errorf("no write token configured: %d, want 403", r.StatusCode)
+	}
+	noReg := httptest.NewServer(NewLocalHandler(LocalConfig{Vehicles: e.vehicles, WriteToken: "tok"}))
+	defer noReg.Close()
+	if r := postInvite(t, noReg.URL, "tok", `{}`); r.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("no registry: %d, want 503", r.StatusCode)
 	}
 }

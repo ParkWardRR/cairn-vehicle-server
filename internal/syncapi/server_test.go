@@ -120,6 +120,13 @@ func (e *env) enrolWith(spec clients.InviteSpec) *app {
 	if err != nil {
 		e.t.Fatal(err)
 	}
+	return e.enrolWithCode(code, "test phone")
+}
+
+// enrolWithCode redeems an invitation code, shown or raw, with a fresh key.
+func (e *env) enrolWithCode(code, name string) *app {
+	e.t.Helper()
+	code = strings.ToLower(strings.ReplaceAll(code, "-", ""))
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		e.t.Fatal(err)
@@ -130,7 +137,7 @@ func (e *env) enrolWith(spec clients.InviteSpec) *app {
 		e.t.Fatal(err)
 	}
 	body, _ := json.Marshal(map[string]string{
-		"code": code, "name": "test phone", "public_key": pubHex, "proof": base64.StdEncoding.EncodeToString(proof),
+		"code": code, "name": name, "public_key": pubHex, "proof": base64.StdEncoding.EncodeToString(proof),
 	})
 	resp := e.rawPost("/v1/enroll/app", body, "")
 	if resp.StatusCode != http.StatusCreated {

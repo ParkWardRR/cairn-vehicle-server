@@ -241,7 +241,26 @@ sudo -u cairn cairn-admin -data /var/lib/cairn client invite --name "Sam's iPhon
   camera is not handy, and `--qr-png FILE` writes the code as an image (mode 0600).
 - The QR code carries the single-use invitation, so treat it like the code: short `--ttl`, show it
   only to the person enrolling. The CA certificate in it is public.
-- The link format is mirrored by `ConfigureLink` in cairn-ios-companion-app; change both together.
+- The link format is mirrored by `ConfigureLink` in cairn-ios-companion-app and `buildPhoneLink` in
+  the web dashboard; change all three together.
+
+### From the web UI
+
+The dashboard's **Add a phone** page makes the same QR code after a passkey check. It asks the
+loopback local API (`POST /v1/local/clients/invite`, a *user* invitation of at most an hour, never
+an admin one), which needs the shared write token:
+
+```bash
+openssl rand -hex 32 | sudo install -m 0640 -o root -g cairn /dev/stdin /etc/cairn/local-write-token
+# add to CAIRN_ARGS in /etc/cairn/server.env, next to -app-local-addr:
+#   -app-local-token-file /etc/cairn/local-write-token
+sudo systemctl restart cairn-server
+```
+
+and in the UI's `/etc/cairn/ui.env`: `NUXT_CAIRN_LOCAL_TOKEN_FILE=/etc/cairn/local-write-token`,
+`NUXT_PHONE_SETUP_URL=https://cairn.example.lan:8444` and `NUXT_PHONE_SETUP_CA_FILE=/etc/cairn/certs/ca.pem`
+(`NUXT_PHONE_SETUP_TAILNET_URL` is optional). The UI reads the token from the file on each use, so the
+secret lives in one place.
 
 ## Snapshot before a risky deploy
 
