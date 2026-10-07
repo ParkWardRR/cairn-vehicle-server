@@ -11,6 +11,9 @@
 //	cairn-admin [-data DIR] counters <device-id>
 //	cairn-admin [-data DIR] client invite|list|revoke
 //
+// `client invite --qr` also prints a QR code (cairn://configure link) carrying the server
+// URL, the invitation code and the private CA, which the phone app consumes in one scan.
+//
 // Device enrolment, including escrowing its storage root, stays on
 // `cairn-server -enroll`, because it must happen with the keystore's master key.
 package main
@@ -62,6 +65,7 @@ func usage() {
   device enroll --blob B64 --confirm-fingerprint 8HEX [--name N] [--allow-key-change] [--reinstate]
   device list
   client invite [--role user|admin] [--vehicles id,id|*] [--name N] [--ttl 10m]
+                [--qr --url https://host:8444 [--tailnet-url URL] [--ca PEM] [--qr-png FILE]]
   client list
   client revoke <id> [reason]
 `)
@@ -228,6 +232,11 @@ func clientCmd(reg *clients.Registry, args []string) error {
 		scope := fs.String("vehicles", "*", "comma-separated vehicle IDs, or * for all")
 		name := fs.String("name", "", "label shown in listings")
 		ttl := fs.Duration("ttl", 0, "lifetime (default 10m)")
+		publicURL := fs.String("url", os.Getenv("CAIRN_PUBLIC_URL"), "with --qr: https URL the phone reaches the app listener at (default $CAIRN_PUBLIC_URL)")
+		tailnetURL := fs.String("tailnet-url", os.Getenv("CAIRN_TAILNET_URL"), "with --qr: optional https URL for the Tailnet route (default $CAIRN_TAILNET_URL)")
+		caFile := fs.String("ca", "/etc/cairn/certs/ca.pem", "with --qr: private CA certificate to embed so the phone trusts the server")
+		showQR := fs.Bool("qr", false, "also print a QR code the phone app scans to set the server, trust its CA and enrol")
+		qrFile := fs.String("qr-png", "", "with --qr: also write the QR code as a PNG to this file (mode 0600)")
 		replaces := fs.String("replaces", "", "id of a client to revoke when this invitation is accepted (key rotation); role, vehicles and name default to that client's")
 		_ = fs.Parse(args[1:])
 		set := map[string]bool{}
@@ -249,6 +258,23 @@ func clientCmd(reg *clients.Registry, args []string) error {
 				*name = old.Name
 			}
 		}
+		// Validate the QR inputs before spending a single-use code on them.
+		var caPEM []byte
+		if *showQR {
+			if *publicURL == "" {
+				return errors.New("--qr needs --url (or CAIRN_PUBLIC_URL)")
+			}
+			if err := requireHTTPS(*publicURL); err != nil {
+				return fmt.Errorf("--url: %w", err)
+			}
+			var err error
+			if caPEM, err = os.ReadFile(*caFile); err != nil {
+				return fmt.Errorf("--ca: %w", err)
+			}
+			if _, err := caDER(caPEM); err != nil {
+				return fmt.Errorf("--ca: %w", err)
+			}
+		}
 		code, inv, err := reg.CreateInvite(clients.InviteSpec{
 			Role: clients.Role(*role), Vehicles: strings.Split(*scope, ","), Name: *name,
 			CreatedBy: "cairn-admin", TTL: *ttl, Replaces: *replaces,
@@ -259,6 +285,27 @@ func clientCmd(reg *clients.Registry, args []string) error {
 		fmt.Printf("invitation code (shown once, single use, expires %s):\n\n    %s\n\n",
 			inv.ExpiresAt.Format(time.RFC3339), clients.FormatCode(code))
 		fmt.Printf("role %s, vehicles %s\n", inv.Role, strings.Join(inv.Vehicles, ","))
+		if *showQR {
+			link, err := configureLink(*publicURL, *tailnetURL, clients.FormatCode(code), caPEM)
+			if err != nil {
+				return err
+			}
+			text, err := qrText(link)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("\nScan with the iPhone camera (opens Cairn). It carries the invitation code, so treat it like the code:\n\n%s\nOr open this link on the phone:\n\n    %s\n\n", text, link)
+			if *qrFile != "" {
+				png, err := qrPNG(link)
+				if err != nil {
+					return err
+				}
+				if err := os.WriteFile(*qrFile, png, 0o600); err != nil {
+					return err
+				}
+				fmt.Printf("QR code written to %s\n", *qrFile)
+			}
+		}
 		if inv.Replaces != "" {
 			fmt.Printf("accepting it revokes client %s in the same write\n", inv.Replaces)
 		}

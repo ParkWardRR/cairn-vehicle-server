@@ -224,6 +224,25 @@ that has quietly lost a link shows up in `systemctl --failed`, and runs it as th
 of every deploy. Tailnet sign-in needs no `tailscale serve` config: the UI asks `tailscaled`
 who owns the peer address behind Caddy (see the dashboard's `docs/auth.md`).
 
+## Enrolling a phone with a QR code
+
+`cairn-admin client invite --qr` prints the invitation as a QR code the phone's camera opens in
+the Cairn app. One scan sets the server URL, trusts the private CA for the app's own connections,
+and enrols the phone, so a tester never types a URL or installs a profile:
+
+```bash
+sudo -u cairn cairn-admin -data /var/lib/cairn client invite --name "Sam's iPhone" --ttl 30m \
+    --qr --url https://cairn.example.lan:8444 [--tailnet-url https://cairn-host.example-tailnet.ts.net]
+```
+
+- `--url` is the app listener (`:8444`), not the web UI on `:443`. It can come from
+  `$CAIRN_PUBLIC_URL`. `--ca` defaults to `/etc/cairn/certs/ca.pem` (the public certificate, no key).
+- The same output holds a `cairn://configure?...` link to send by AirDrop or Messages when the
+  camera is not handy, and `--qr-png FILE` writes the code as an image (mode 0600).
+- The QR code carries the single-use invitation, so treat it like the code: short `--ttl`, show it
+  only to the person enrolling. The CA certificate in it is public.
+- The link format is mirrored by `ConfigureLink` in cairn-ios-companion-app; change both together.
+
 ## Snapshot before a risky deploy
 
 ```bash
