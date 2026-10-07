@@ -57,7 +57,7 @@ Honest status, as of 2026-10-06. "Deployed" is taken from the front door's
 | Escrowed storage roots, counters, assignments, revocation | **Shipped, tested** | Crypto-shredding exists as a library call; **no command exposes it yet** |
 | `cairn-tsdb` analytical store (in-memory DuckDB) | **Shipped, deployed** | Rebuilt from the raw bundles on every start; refuses to serve if the rebuild does not reproduce |
 | PostgreSQL/PostGIS decode (`cairn-worker`) | **Built and tested in CI; not installed by `deploy-v3.sh`** | No systemd unit is shipped. The dashboard reads `cairn-tsdb`, not PostgreSQL |
-| `store/v1` views, tune records, engine profiles, health summary, bundle paths | **Shipped, tested** | Store contract `store/v1.1`; see [below](#analytical-store-storev1) |
+| `store/v1` views, tune records, engine profiles, health summary, bundle paths | **Shipped, tested** | Store contract `store/v1.2`; see [below](#analytical-store-storev1) |
 | Real hardware, end to end | **First verified 2026-10-06** | The dongle, `cmd/cairn-phone` on macOS, this server's relay, `cairn-tsdb` and the dashboard talked to each other for the first time: nine bundles over BLE in 62 s, nine committed via `/v1/relay/bundles/*`, nine receipts signed, the dongle verified each against the pinned key and pruned. The firmware ran a dev-pairing build (Just Works, no MITM) — see the firmware README's "Pairing and access" caveat. A real-car trip is still open (server issue 20) |
 | Direct dongle upload over Wi-Fi or LTE (`uplink/v1`) | **Planned** | Owner decision 2026-10-05. The contract is draft and nothing here implements it (server issue 21) |
 | LTE digests (provisional trips, usage accounting) | **Planned** | Server issue 25 |
@@ -526,13 +526,16 @@ The dashboard reads the store, not the server's internals, and the store has a v
 - **Views:** `v_telemetry` (OBD anchored, with the latest boost and GNSS row attached **and how stale each is**),
   `v_reproducibility`, `v_vehicles`, `v_drive_summary`, `v_trip_summary`, `v_trim_map`, `v_boost_curve`, `v_pulls`,
   `v_speed_agreement`, `v_gnss_sources`, and since `v1.1`, `v_boot_start`, `v_metric_samples`, `v_tune_effect` and
-  `v_health_stats`.
+  `v_health_stats`, and since `v1.2`, `v_trip_period`.
+- **Table macros** (parameterised queries; a view cannot take a parameter), since `v1.2`: `period_summary(from_day, to_day)`,
+  per-vehicle trips, duration, distance and max speeds over a half-open UTC date range, called as
+  `SELECT * FROM period_summary('2026-03-01', '2026-04-01')` over `POST /query`.
 - **Every table and view carries `vehicle_id`**, and everything is computed per vehicle, so a caller selects one car with
   `WHERE vehicle_id = '<hex>'` and gets exactly that car. A caller writing a join must join on `vehicle_id` as well as
   `boot_id`.
 - **Endpoints:** `POST /query`, `GET /healthz`, `/capabilities`, `/status`, `/metrics`, `POST /reload`, and
   `GET /snapshot` (a Parquet archive, optionally `?vehicle=` and `?format=`).
-- `/healthz` reports the build and `store_contract` (`store/v1.1`), so a deploy check notices a release that dropped a view.
+- `/healthz` reports the build and `store_contract` (`store/v1.2`), so a deploy check notices a release that dropped a view.
   `/capabilities` lists the live catalogue with a schema fingerprint.
 
 ### The compatible-range check
