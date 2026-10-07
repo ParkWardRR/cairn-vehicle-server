@@ -197,6 +197,11 @@ func connect(timeout time.Duration, wantName string) (*offloadclient.Client, fun
 	found := make(chan bluetooth.ScanResult, 1)
 	go func() {
 		_ = adapter.Scan(func(a *bluetooth.Adapter, r bluetooth.ScanResult) {
+			// RSSI 127 is CoreBluetooth's "no reading": a peripheral remembered from an earlier
+			// scan, not one heard now. Connecting to it never reaches the radio.
+			if r.RSSI == 127 || r.RSSI == 0 {
+				return
+			}
 			if r.HasServiceUUID(svc) || (wantName != "" && r.LocalName() == wantName) {
 				select {
 				case found <- r:
@@ -215,17 +220,35 @@ func connect(timeout time.Duration, wantName string) (*offloadclient.Client, fun
 	}
 	fmt.Printf("found %q (rssi %d); connecting…\n", res.LocalName(), res.RSSI)
 
-	dev, err := adapter.Connect(res.Address, bluetooth.ConnectionParams{})
-	if err != nil {
-		return nil, nil, fmt.Errorf("connect: %w", err)
+	// At a weak signal (the dongle is often heard at -85 dBm or worse) CoreBluetooth can report
+	// a connection that never completed; tinygo then returns a Device with no peripheral and
+	// DiscoverServices dereferences nil. Treat that as a failed attempt and try again.
+	var dev bluetooth.Device
+	var services []bluetooth.DeviceService
+	var err error
+	connected := false
+	for attempt := 1; attempt <= 4 && !connected; attempt++ {
+		if attempt > 1 {
+			fmt.Printf("connection attempt %d of 4…\n", attempt)
+			time.Sleep(time.Second)
+		}
+		dev, err = adapter.Connect(res.Address, bluetooth.ConnectionParams{})
+		if err != nil {
+			fmt.Printf("  connect failed: %v\n", err)
+			continue
+		}
+		services, err = discoverServices(dev, svc)
+		if err != nil || len(services) == 0 {
+			fmt.Printf("  the link did not hold during service discovery: %v\n", err)
+			safeDisconnect(dev)
+			continue
+		}
+		connected = true
 	}
-	cleanup := func() { _ = dev.Disconnect() }
-
-	services, err := dev.DiscoverServices([]bluetooth.UUID{svc})
-	if err != nil || len(services) == 0 {
-		cleanup()
-		return nil, nil, fmt.Errorf("the Cairn service was not found: %v", err)
+	if !connected {
+		return nil, nil, errors.New("could not hold a connection to the dongle (signal too weak? move it within about a metre of the Mac, off the USB 3 hub)")
 	}
+	cleanup := func() { safeDisconnect(dev) }
 	ctlU, _ := bluetooth.ParseUUID(controlUUID)
 	datU, _ := bluetooth.ParseUUID(dataUUID)
 	verU, _ := bluetooth.ParseUUID(versionUUID)
@@ -351,4 +374,22 @@ func main() {
 		fmt.Fprintln(os.Stderr, "usage: cairn-phone enrol|offload [flags]")
 		os.Exit(2)
 	}
+}
+
+// discoverServices is DiscoverServices that reports a link which never really came up as an
+// error instead of a nil-pointer panic inside the Bluetooth library.
+func discoverServices(dev bluetooth.Device, svc bluetooth.UUID) (services []bluetooth.DeviceService, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			services, err = nil, fmt.Errorf("the connection did not complete (%v)", r)
+		}
+	}()
+	return dev.DiscoverServices([]bluetooth.UUID{svc})
+}
+
+// safeDisconnect is Disconnect that tolerates a device whose connection never completed
+// (tinygo's darwin Disconnect dereferences a nil peripheral).
+func safeDisconnect(dev bluetooth.Device) {
+	defer func() { _ = recover() }()
+	_ = dev.Disconnect()
 }
