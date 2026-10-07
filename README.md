@@ -58,7 +58,7 @@ Honest status, as of 2026-10-06. "Deployed" is taken from the front door's
 | `cairn-tsdb` analytical store (in-memory DuckDB) | **Shipped, deployed** | Rebuilt from the raw bundles on every start; refuses to serve if the rebuild does not reproduce |
 | PostgreSQL/PostGIS decode (`cairn-worker`) | **Built and tested in CI; not installed by `deploy-v3.sh`** | No systemd unit is shipped. The dashboard reads `cairn-tsdb`, not PostgreSQL |
 | `store/v1` views, tune records, engine profiles, health summary, bundle paths | **Shipped, tested** | Store contract `store/v1.1`; see [below](#analytical-store-storev1) |
-| Real hardware, end to end | **Not yet verified** | The first real over-air trip through the relay to the dashboard is open work (server issue 20). The offload is tested with the firmware's real protocol code and a simulated BLE link |
+| Real hardware, end to end | **First verified 2026-10-06** | The dongle, `cmd/cairn-phone` on macOS, this server's relay, `cairn-tsdb` and the dashboard talked to each other for the first time: nine bundles over BLE in 62 s, nine committed via `/v1/relay/bundles/*`, nine receipts signed, the dongle verified each against the pinned key and pruned. The firmware ran a dev-pairing build (Just Works, no MITM) — see the firmware README's "Pairing and access" caveat. A real-car trip is still open (server issue 20) |
 | Direct dongle upload over Wi-Fi or LTE (`uplink/v1`) | **Planned** | Owner decision 2026-10-05. The contract is draft and nothing here implements it (server issue 21) |
 | LTE digests (provisional trips, usage accounting) | **Planned** | Server issue 25 |
 | Sealed device configuration (Wi-Fi and LTE settings sent to the dongle) | **Planned** | Server issue 24 |
