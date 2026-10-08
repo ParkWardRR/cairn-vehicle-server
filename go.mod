@@ -8,6 +8,7 @@ require (
 	github.com/klauspost/compress v1.18.3
 	go.bug.st/serial v1.8.0
 	golang.org/x/crypto v0.48.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
