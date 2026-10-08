@@ -77,6 +77,11 @@ type Result struct {
 	Transitions []Transition
 	Gaps        []Gap
 
+	// TimeObs are wall-clock observations, one per source per reading. Kept as
+	// evidence rather than folded into a single answer: choosing between sources
+	// is policy, and policy belongs where it can change without reflashing.
+	TimeObs []TimeObservation
+
 	Trip   *Trip
 	Events []Event
 
@@ -294,6 +299,26 @@ type Gap struct {
 	DurationMS      uint32
 	ExpectedSamples uint16
 	Cause           uint8
+}
+
+// TimeObservation is one wall-clock reading from one source (spec §4.12).
+//
+// ObservedAt is deliberately absent: a row whose job is to establish the time
+// cannot be stamped with the time it is establishing. MonotonicMS is the device
+// clock at the reading, and ImpliedBasisMS is utc_ms minus that -- the UTC of
+// monotonic zero this source implies, which is the figure that makes two sources
+// comparable and makes drift in one of them visible.
+type TimeObservation struct {
+	VehicleID [16]byte
+
+	Seq         uint32
+	MonotonicMS uint32
+
+	UTCMillis       uint64
+	ImpliedBasisMS  *uint64
+	AccuracyMS      *uint32
+	Source          string
+	Adopted         bool
 }
 
 // Trip is the derived journey.
@@ -644,6 +669,30 @@ func (r *Result) decodeFrame(manifest *format.Manifest, f *format.Frame, segment
 			ev.Lat, ev.Lon = &lat, &lon
 		}
 		r.Events = append(r.Events, ev)
+
+	case format.RecordTimeObservation:
+		o, err := format.ParseTimeObservation(f.Payload)
+		if err != nil {
+			warn(err)
+			return
+		}
+		row := TimeObservation{
+			VehicleID:   manifest.VehicleID,
+			Seq:         f.Seq,
+			MonotonicMS: f.MonotonicMS,
+			UTCMillis:   o.UTCMillis,
+			AccuracyMS:  o.AccuracyMS,
+			Source:      o.Source.String(),
+			Adopted:     o.Adopted,
+		}
+		if basis, ok := o.ImpliedBasisMS(f.MonotonicMS); ok {
+			row.ImpliedBasisMS = &basis
+		}
+		// An unknown source is kept, not dropped. The reading is still evidence,
+		// and a newer device naming a source this build has not heard of is the
+		// case the field exists to survive -- Source already renders it as
+		// "unknown(N)" so nothing is silently relabelled.
+		r.TimeObs = append(r.TimeObs, row)
 
 	case format.RecordIMURawWindow, format.RecordPolicySnapshot:
 		// Understood but not yet normalized into its own table. Counted so the

@@ -422,6 +422,13 @@ func appendResult(apps map[string]*duckdb.Appender, ref Ref, res *decode.Result,
 			return expected{}, err
 		}
 	}
+	for i := range res.TimeObs {
+		t := &res.TimeObs[i]
+		if err := row("time_obs", veh(t.VehicleID), root, boot, t.Seq, t.MonotonicMS,
+			t.UTCMillis, opt(t.ImpliedBasisMS), opt(t.AccuracyMS), t.Source, t.Adopted); err != nil {
+			return expected{}, err
+		}
+	}
 
 	return expected{root: root, counts: c}, nil
 }

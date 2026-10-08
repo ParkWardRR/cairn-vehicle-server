@@ -118,6 +118,27 @@ CREATE TABLE gap (
     expected_samples USMALLINT, cause UTINYINT
 );
 
+-- Wall-clock observations, one row per source per reading (format v3 section 4.12).
+--
+-- There is no observed_at column on purpose: a row whose job is to establish the
+-- time cannot be stamped with the time it is establishing. mono_ms is the device
+-- clock at the reading and implied_basis_ms is utc_ms minus it -- the UTC of
+-- monotonic zero this source implies, which is what makes two sources comparable
+-- and drift within one visible.
+--
+-- adopted marks the observation the device used for the manifest's utc_basis_ms,
+-- so a reader can see what was chosen as well as what was available.
+CREATE TABLE time_obs (
+    vehicle_id VARCHAR NOT NULL,
+    content_root VARCHAR, boot_id VARCHAR, seq UINTEGER,
+    mono_ms    UINTEGER,
+    utc_ms     UBIGINT,
+    implied_basis_ms UBIGINT,
+    accuracy_ms UINTEGER,
+    source     VARCHAR,
+    adopted    BOOLEAN
+);
+
 -- The owner's tune records, copied from the vehicle registry when the store is built (the
 -- registry is the one place they are written). tuned_at is the start of the tune's day,
 -- UTC. A store with no tune records simply has no rows here.

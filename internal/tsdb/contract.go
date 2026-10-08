@@ -26,15 +26,19 @@ import (
 // store/v1.2 adds, all additive: the view v_trip_period and the table macro
 // period_summary(from_day, to_day).
 //
-// store/v1.3 adds boost.pedal_pct, accelerator pedal position from PID 0x49. Additive:
-// no existing column changes meaning. It is a distinct signal from obd.throttle_pct,
-// which is the throttle plate angle and does not reach 100% at wide-open throttle on a
-// drive-by-wire engine -- see contracts/format/v3 section 4.11.2. NULL means not
-// measured, which every row written before this column existed necessarily is.
+// store/v1.3 adds, all additive:
+//   - boost.pedal_pct, accelerator pedal position from PID 0x49. A distinct signal from
+//     obd.throttle_pct, which is the throttle plate angle and does not reach 100% at
+//     wide-open throttle on a drive-by-wire engine -- see contracts/format/v3 section
+//     4.11.2. NULL means not measured, which every row written before this column
+//     existed necessarily is.
+//   - the time_obs table: wall-clock observations, one row per source per reading
+//     (section 4.12). It has no observed_at, because a row whose job is to establish
+//     the time cannot be stamped with the time it is establishing.
 const StoreContract = "store/v1.3"
 
 // schemaFingerprint is the fingerprint of the schema StoreContract describes.
-const schemaFingerprint = "718f568c5e776a4107db597c3523949385b6d2b4b674dfcc9e4c7013ee3fd9dd"
+const schemaFingerprint = "cb398391d2506f25d8b034c36fdbc2eb86ae48af1379effd6a4f4d2a06aadeb8"
 
 // Capabilities is what a running store offers: the objects present in its database.
 type Capabilities struct {

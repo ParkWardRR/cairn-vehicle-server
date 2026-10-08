@@ -89,6 +89,7 @@ type expectation struct {
 	Health   *healthExpectation     `json:"health,omitempty"`
 	Update   *updateExpectation     `json:"update,omitempty"`
 	OBDExt   *obdExtExpectation     `json:"obd_ext,omitempty"`
+	TimeObs  *timeObsExpectation    `json:"time_obs,omitempty"`
 }
 
 type scanExpectation struct {
@@ -205,6 +206,27 @@ type expectedOBDExt struct {
 	BoostPSI         *float64 `json:"boost_psi,omitempty"`
 	Lambda           *float64 `json:"lambda,omitempty"`
 	AbsLoadPct       *float64 `json:"abs_load_pct,omitempty"`
+	// PedalPct is read only from schema_version 2; a version 1 record's byte 23
+	// is reserved and must decode as absent even when it is non-zero.
+	SchemaVersion uint8  `json:"schema_version"`
+	PedalPct      *uint8 `json:"pedal_pct"`
+}
+
+type expectedTimeObs struct {
+	MonotonicMS uint32  `json:"monotonic_ms"`
+	UTCMillis   uint64  `json:"utc_ms"`
+	AccuracyMS  *uint32 `json:"accuracy_ms"`
+	Source      string  `json:"source"`
+	Adopted     bool    `json:"adopted"`
+	// ImpliedBasisMS is utc_ms minus monotonic_ms: the UTC of monotonic zero this
+	// source implies. Absent when monotonic exceeds the wall clock, which cannot
+	// happen on a sane device and must not wrap.
+	ImpliedBasisMS *uint64 `json:"implied_basis_ms"`
+}
+
+type timeObsExpectation struct {
+	Records []expectedTimeObs `json:"records"`
+	Note    string            `json:"note"`
 }
 
 type obdExtExpectation struct {
@@ -267,6 +289,7 @@ func run(outDir, enrolmentDir string) error {
 		{"merkle-odd-leaves", vectorMerkleOddLeaves},
 		{"content-root-member-order", vectorContentRootMemberOrder},
 		{"manifest-valid", vectorManifestValid},
+		{"manifest-engine-profile", vectorManifestEngineProfile},
 		{"manifest-bad-signature", vectorManifestBadSignature},
 		{"manifest-members-match", vectorManifestMembersMatch},
 		{"manifest-segment-header-mismatch", vectorManifestSegmentMismatch},
@@ -276,6 +299,7 @@ func run(outDir, enrolmentDir string) error {
 		{"trip-event-types", vectorTripEventTypes},
 		{"health-bitmap", vectorHealthBitmap},
 		{"obd-extended", vectorOBDExtended},
+		{"time-observation", vectorTimeObservation},
 		{"update-descriptor-valid", vectorUpdateDescriptorValid},
 		{"update-descriptor-bad-signature", vectorUpdateDescriptorBadSignature},
 
@@ -1097,6 +1121,54 @@ func vectorManifestValid(dir string, devicePriv, _ ed25519.PrivateKey) error {
 	})
 }
 
+// A manifest carrying the optional engine_profile key (29).
+//
+// The point is that it is optional and sorts last, so a reader must accept 27,
+// 28 or 29 fields and must not require this key. manifest-valid covers the
+// without case; this covers the with case, and the two together pin the encoding
+// of both.
+func vectorManifestEngineProfile(dir string, devicePriv, _ ed25519.PrivateKey) error {
+	m, err := sampleManifest()
+	if err != nil {
+		return err
+	}
+
+	m.HasEngineProfile = true
+	m.EngineProfileID = "bmw-n20"
+	m.EngineProfileVersion = 1
+	// A fixed digest, not a real profile's: the vector pins the encoding, and a
+	// real digest here would make the vector churn every time a profile is edited.
+	for i := range m.EngineProfileSHA256 {
+		m.EngineProfileSHA256[i] = byte(0x60 + i)
+	}
+
+	encoded, sig, err := m.Sign(devicePriv)
+	if err != nil {
+		return err
+	}
+	pub := devicePriv.Public().(ed25519.PublicKey)
+	digest := sha256.Sum256(encoded)
+
+	return writeVector(dir, "manifest-engine-profile", &expectation{
+		Description: "A signed manifest that names the engine profile which produced it (key 29).",
+		Asserts: "engine_profile is optional and sorts after key 28, so this manifest has " +
+			"one more field than manifest-valid and must still decode and verify. A reader " +
+			"must not require the key, and must not reject a manifest for having 29 fields. " +
+			"The digest identifies the profile document, so a profile edited without a " +
+			"version bump is a different profile and says so.",
+		Manifest: &manifestExpectation{
+			Valid:              true,
+			SignatureValid:     true,
+			ContentRootHex:     hex.EncodeToString(m.ContentRoot[:]),
+			DevicePublicKeyHex: hex.EncodeToString(pub),
+			CanonicalBytesHex:  hex.EncodeToString(digest[:]),
+		},
+	}, map[string][]byte{
+		"manifest.cbor": encoded,
+		"manifest.sig":  sig,
+	})
+}
+
 func vectorManifestBadSignature(dir string, devicePriv, _ ed25519.PrivateKey) error {
 	m, err := sampleManifest()
 	if err != nil {
@@ -1389,7 +1461,7 @@ func vectorHealthBitmap(dir string, _, _ ed25519.PrivateKey) error {
 
 func obdExtPayload(mapKpa, mafCgps, lambdaE4, absLoadRaw uint16,
 	baroKpa uint8, ambientC, stftPct, ltftPct int8,
-	requested, answered uint32, cadence uint16) []byte {
+	requested, answered uint32, cadence uint16, pedalPct uint8) []byte {
 	p := make([]byte, 24)
 	binary.LittleEndian.PutUint16(p[0:], mapKpa)
 	binary.LittleEndian.PutUint16(p[2:], mafCgps)
@@ -1402,10 +1474,13 @@ func obdExtPayload(mapKpa, mafCgps, lambdaE4, absLoadRaw uint16,
 	binary.LittleEndian.PutUint32(p[12:], requested)
 	binary.LittleEndian.PutUint32(p[16:], answered)
 	binary.LittleEndian.PutUint16(p[20:], cadence)
+	p[23] = pedalPct
 	return p
 }
 
 func ptrU16(v uint16) *uint16   { return &v }
+func ptrU32(v uint32) *uint32   { return &v }
+func ptrU64(v uint64) *uint64   { return &v }
 func ptrU8(v uint8) *uint8      { return &v }
 func ptrI8(v int8) *int8        { return &v }
 func ptrF64(v float64) *float64 { return &v }
@@ -1421,20 +1496,26 @@ func vectorOBDExtended(dir string, _, _ ed25519.PrivateKey) error {
 	// Lambda 0.88 → raw = 0.88 * 32768 = 28835.84 → 28836.
 	// Abs load 190% → raw = 190 * 255 / 100 = 484 (truncated; 484*100/255=189.8%).
 	// STFT -5%, LTFT +18%, ambient 28 C, MAF 15000 cgps.
-	p0 := obdExtPayload(230, 15000, 28836, 484, 101, 28, -5, 18, 6, 6, 200)
-	if err := w.Append(format.RecordOBDExtended, 1, 0, 0, p0); err != nil {
+	p0 := obdExtPayload(230, 15000, 28836, 484, 101, 28, -5, 18, 6, 6, 200, 97)
+	if err := w.Append(format.RecordOBDExtended, 2, 0, 0, p0); err != nil {
 		return err
 	}
 
 	// Record 1: all sentinels — a cold-only cycle where nothing was sampled.
-	p1 := obdExtPayload(0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFF, -128, -128, -128, 0, 0, 1200)
-	if err := w.Append(format.RecordOBDExtended, 1, 0, 1000, p1); err != nil {
+	p1 := obdExtPayload(0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFF, -128, -128, -128, 0, 0, 1200, 0xFF)
+	if err := w.Append(format.RecordOBDExtended, 2, 0, 1000, p1); err != nil {
 		return err
 	}
 
 	// Record 2: MAP saturated at 255 kPa. Lambda 0.85 → raw 27852.
 	// No baro (sentinel) so boost PSI is uncomputable.
-	p2 := obdExtPayload(255, 0xFFFF, 27852, 0xFFFF, 0xFF, -128, -128, -128, 2, 2, 200)
+	//
+	// Deliberately schema_version 1, with byte 23 set to 55. A version 1 record's
+	// byte 23 is reserved, so a conformant reader must report pedal_pct absent
+	// here however tempting the value looks -- that byte predates the field and a
+	// reader keying on the value rather than the version would invent a
+	// measurement.
+	p2 := obdExtPayload(255, 0xFFFF, 27852, 0xFFFF, 0xFF, -128, -128, -128, 2, 2, 200, 55)
 	if err := w.Append(format.RecordOBDExtended, 1, 0, 2000, p2); err != nil {
 		return err
 	}
@@ -1461,31 +1542,133 @@ func vectorOBDExtended(dir string, _, _ ed25519.PrivateKey) error {
 			PIDsRequested: 6, PIDsAnswered: 6, PollCadenceMS: 200,
 			MAPSaturated: false,
 			BoostPSI:     ptrF64(boostPSI0), Lambda: ptrF64(lambda0),
-			AbsLoadPct: ptrF64(absLoadPct0),
+			AbsLoadPct:    ptrF64(absLoadPct0),
+			SchemaVersion: 2, PedalPct: ptrU8(97),
 		},
 		{
 			PIDsRequested: 0, PIDsAnswered: 0, PollCadenceMS: 1200,
-			MAPSaturated: false,
+			MAPSaturated:  false,
+			SchemaVersion: 2, PedalPct: nil,
 		},
 		{
 			MAPkPa: ptrU16(255), LambdaE4: ptrU16(27852),
 			PIDsRequested: 2, PIDsAnswered: 2, PollCadenceMS: 200,
-			MAPSaturated: true,
-			Lambda:       ptrF64(lambda2),
+			MAPSaturated:  true,
+			Lambda:        ptrF64(lambda2),
+			SchemaVersion: 1, PedalPct: nil,
 		},
 	}
 
 	return writeVector(dir, "obd-extended", &expectation{
-		Description: "Three OBD_EXTENDED records: full boost, all sentinels, and MAP saturated.",
+		Description: "Three OBD_EXTENDED records: full boost with pedal position, all " +
+			"sentinels, and MAP saturated at schema_version 1.",
 		Asserts: "Every field decodes to the expected value or is absent when sentinel. " +
 			"MAPSaturated is true only when MAP is 255 kPa. BoostPSI requires both MAP " +
-			"and baro; with either absent it is uncomputable, not assumed from sea level.",
+			"and baro; with either absent it is uncomputable, not assumed from sea level. " +
+			"pedal_pct is read only at schema_version 2: record 2 is version 1 and carries " +
+			"55 in byte 23, which a conformant reader reports as absent because that byte " +
+			"is reserved there.",
 		Scan:  exp,
 		Keyed: keyed,
 		OBDExt: &obdExtExpectation{
 			Records: records,
 			Note: "Sentinels: u16 0xFFFF, u8 0xFF, i8 0x80 (-128). A sentinel field " +
 				"is absent, not zero. Derived values use the standard's own formulas.",
+		},
+	}, segmentFiles(w.Bytes()))
+}
+
+// ── time observations ───────────────────────────────────────────────────────
+
+func timeObsPayload(utcMS uint64, accMS uint32, source uint8, adopted bool) []byte {
+	p := make([]byte, 16)
+	binary.LittleEndian.PutUint64(p[0:], utcMS)
+	binary.LittleEndian.PutUint32(p[8:], accMS)
+	p[12] = source
+	if adopted {
+		p[13] = format.TimeObservationAdopted
+	}
+	return p
+}
+
+// Four TIME_OBSERVATION records covering the cases the design exists for: a
+// clock available before any fix, GNSS arriving later and being adopted, a
+// network clock that disagrees, and a source this build does not know.
+func vectorTimeObservation(dir string, _, _ ed25519.PrivateKey) error {
+	w, err := newWriter(testHeader(0), format.ScanState{})
+	if err != nil {
+		return err
+	}
+
+	// A fixed wall clock for the basis: 1790000000000 ms. Each record states the
+	// time as its source saw it, at its own monotonic offset.
+	const basis = uint64(1790000000000)
+
+	type rec struct {
+		monoMS  uint32
+		utcMS   uint64
+		accMS   uint32
+		source  uint8
+		adopted bool
+	}
+	recs := []rec{
+		// The phone has the time 2 s in, long before any fix. Its implied basis
+		// is exactly the true one.
+		{2000, basis + 2000, 500, uint8(format.TimeSourcePhone), false},
+		// The modem attaches at 20 s and agrees to within a second.
+		{20000, basis + 20000 + 400, 1000, uint8(format.TimeSourceModemNetwork), false},
+		// GNSS gets a fix at 130 s -- the delay measured on a real drive -- and is
+		// adopted as the manifest basis despite arriving last, because it is the
+		// most accurate.
+		{130000, basis + 130000, 100, uint8(format.TimeSourceGNSS), true},
+		// A source number this build has never heard of, stating no accuracy.
+		// Kept, not rejected: the reading is still evidence, and surviving this
+		// is why the field is a number rather than a closed set.
+		{140000, basis + 140000, 0xFFFFFFFF, 9, false},
+	}
+
+	var expected []expectedTimeObs
+	for _, r := range recs {
+		if err := w.Append(format.RecordTimeObservation, 1, 0, r.monoMS,
+			timeObsPayload(r.utcMS, r.accMS, r.source, r.adopted)); err != nil {
+			return err
+		}
+		e := expectedTimeObs{
+			MonotonicMS: r.monoMS,
+			UTCMillis:   r.utcMS,
+			Source:      format.TimeSource(r.source).String(),
+			Adopted:     r.adopted,
+		}
+		if r.accMS != 0xFFFFFFFF {
+			e.AccuracyMS = ptrU32(r.accMS)
+		}
+		e.ImpliedBasisMS = ptrU64(r.utcMS - uint64(r.monoMS))
+		expected = append(expected, e)
+	}
+
+	exp, keyed, err := scanBoth(w.Bytes(), format.ScanState{})
+	if err != nil {
+		return err
+	}
+
+	return writeVector(dir, "time-observation", &expectation{
+		Name:        "time-observation",
+		Description: "Four TIME_OBSERVATION records: phone, modem network, GNSS (adopted), and an unknown source.",
+		Asserts: "Each record decodes to its stated source, wall clock and accuracy. " +
+			"accuracy_ms is absent when the source stated none (0xFFFFFFFF), which is not " +
+			"the same as claiming zero uncertainty. implied_basis_ms is utc_ms minus the " +
+			"FRAME's monotonic_ms, not a payload field. An unknown source number is kept " +
+			"and rendered as unknown(N) rather than rejected. Exactly one record has " +
+			"adopted set, and it is not the earliest -- the device may adopt a later, more " +
+			"accurate source.",
+		Scan:  exp,
+		Keyed: keyed,
+		TimeObs: &timeObsExpectation{
+			Records: expected,
+			Note: "All four imply the same basis to within their stated accuracy, which is " +
+				"the comparison the record exists to make possible. The phone had the time " +
+				"128 s before GNSS did: a drive that never gets a fix is datable from these " +
+				"records even though the manifest basis would be zero.",
 		},
 	}, segmentFiles(w.Bytes()))
 }

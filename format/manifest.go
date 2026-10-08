@@ -94,6 +94,19 @@ type Manifest struct {
 	HasTripSeq bool
 	TripSeq    uint32
 
+	// HasEngineProfile reports whether the bundle names the engine profile that
+	// produced it. Optional: a device with no profile, or one built before the
+	// key existed, still produces a valid manifest, and a reader must not
+	// require it.
+	//
+	// EngineProfileSHA256 is the digest of the profile document, not just a
+	// name, because a profile edited without a version bump is a different
+	// profile and only the digest says so.
+	HasEngineProfile     bool
+	EngineProfileID      string
+	EngineProfileVersion uint8
+	EngineProfileSHA256  [32]byte
+
 	// VehicleID, AssignmentID and DeviceCounter bind the bundle to a vehicle, to
 	// the device-to-vehicle assignment that was active when it was captured, and
 	// to a position in the device's monotonic bundle sequence. Each is repeated
@@ -146,8 +159,14 @@ const (
 	keyStorageKeyVersion = 27
 	keyEncryptionSuite   = 28
 
+	// Optional, and last. The engine profile that produced the bundle: the
+	// profile decides the OBD request, every conversion, the cadences and the
+	// thresholds, so a bundle that does not name it cannot be checked against
+	// the rules that made it.
+	keyEngineProfile = 29 // optional
+
 	manifestFieldCountBase = 27
-	manifestFieldCountMax  = 28
+	manifestFieldCountMax  = 29
 )
 
 var (
@@ -173,9 +192,15 @@ func (m *Manifest) MarshalCBOR() ([]byte, error) {
 	}
 
 	e := &cborEncoder{}
+	// Two independent optional keys (23 trip_seq, 29 engine_profile), so the
+	// count is the mandatory set plus however many are present -- not a choice
+	// between two totals.
 	fieldCount := manifestFieldCountBase
 	if m.HasTripSeq {
-		fieldCount = manifestFieldCountMax
+		fieldCount++
+	}
+	if m.HasEngineProfile {
+		fieldCount++
 	}
 	e.mapHeader(fieldCount)
 
@@ -278,6 +303,14 @@ func (m *Manifest) MarshalCBOR() ([]byte, error) {
 	e.key(keyEncryptionSuite)
 	e.text(m.EncryptionSuite)
 
+	if m.HasEngineProfile {
+		e.key(keyEngineProfile)
+		e.arrayHeader(3)
+		e.text(m.EngineProfileID)
+		e.uint(uint64(m.EngineProfileVersion))
+		e.bytes(m.EngineProfileSHA256[:])
+	}
+
 	return e.buf, nil
 }
 
@@ -312,8 +345,11 @@ func decodeManifest(b []byte) (*Manifest, error) {
 	if err != nil {
 		return nil, fmt.Errorf("manifest map header: %w", err)
 	}
-	if n != manifestFieldCountBase && n != manifestFieldCountMax {
-		return nil, fmt.Errorf("manifest has %d fields, expected %d or %d",
+	// A range rather than a pair of totals: trip_seq and engine_profile are
+	// independently optional, so 27, 28 and 29 are all well-formed. Which keys
+	// are actually present is checked below, per key.
+	if n < manifestFieldCountBase || n > manifestFieldCountMax {
+		return nil, fmt.Errorf("manifest has %d fields, expected %d to %d",
 			n, manifestFieldCountBase, manifestFieldCountMax)
 	}
 
@@ -460,6 +496,26 @@ func decodeManifest(b []byte) (*Manifest, error) {
 			if m.EncryptionSuite != EncryptionSuiteV1 {
 				return nil, fmt.Errorf("unsupported encryption suite %q", m.EncryptionSuite)
 			}
+		case keyEngineProfile:
+			fields, err := d.arrayHeader()
+			if err != nil {
+				return nil, fmt.Errorf("engine_profile: %w", err)
+			}
+			if fields != 3 {
+				return nil, fmt.Errorf("engine_profile has %d fields, want 3", fields)
+			}
+			if m.EngineProfileID, err = d.text(); err != nil {
+				return nil, fmt.Errorf("engine_profile id: %w", err)
+			}
+			if m.EngineProfileVersion, err = d.uint8(); err != nil {
+				return nil, fmt.Errorf("engine_profile version: %w", err)
+			}
+			sum, err := d.bytesN(32)
+			if err != nil {
+				return nil, fmt.Errorf("engine_profile sha256: %w", err)
+			}
+			copy(m.EngineProfileSHA256[:], sum)
+			m.HasEngineProfile = true
 		default:
 			return nil, fmt.Errorf("unknown manifest key %d", key)
 		}

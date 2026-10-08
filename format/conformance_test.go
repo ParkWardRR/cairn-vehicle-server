@@ -317,8 +317,21 @@ type vectorExpectation struct {
 			BoostPSI         *float64 `json:"boost_psi"`
 			Lambda           *float64 `json:"lambda"`
 			AbsLoadPct       *float64 `json:"abs_load_pct"`
+			SchemaVersion    uint8    `json:"schema_version"`
+			PedalPct         *uint8   `json:"pedal_pct"`
 		} `json:"records"`
 	} `json:"obd_ext"`
+
+	TimeObs *struct {
+		Records []struct {
+			MonotonicMS    uint32  `json:"monotonic_ms"`
+			UTCMillis      uint64  `json:"utc_ms"`
+			AccuracyMS     *uint32 `json:"accuracy_ms"`
+			Source         string  `json:"source"`
+			Adopted        bool    `json:"adopted"`
+			ImpliedBasisMS *uint64 `json:"implied_basis_ms"`
+		} `json:"records"`
+	} `json:"time_obs"`
 }
 
 func TestConformanceVectors(t *testing.T) {
@@ -358,7 +371,7 @@ func TestConformanceVectors(t *testing.T) {
 
 		t.Run(e.Name(), func(t *testing.T) {
 			switch {
-			case exp.Events != nil, exp.Health != nil, exp.OBDExt != nil:
+			case exp.Events != nil, exp.Health != nil, exp.OBDExt != nil, exp.TimeObs != nil:
 				checkScanVector(t, dir, &exp)
 				if exp.Events != nil {
 					checkEventsVector(t, dir, &exp)
@@ -368,6 +381,9 @@ func TestConformanceVectors(t *testing.T) {
 				}
 				if exp.OBDExt != nil {
 					checkOBDExtVector(t, dir, &exp)
+				}
+				if exp.TimeObs != nil {
+					checkTimeObsVector(t, dir, &exp)
 				}
 			case exp.Scan != nil:
 				checkScanVector(t, dir, &exp)
@@ -893,6 +909,22 @@ func checkOBDExtVector(t *testing.T, dir string, exp *vectorExpectation) {
 			}
 		}
 
+		if f.SchemaVersion != want.SchemaVersion {
+			t.Errorf("record %d schema_version = %d, want %d", seen-1, f.SchemaVersion, want.SchemaVersion)
+		}
+		// pedal_pct is readable only from schema_version 2. Record 2 of the vector
+		// is version 1 and carries a non-zero byte 23 on purpose: a reader keying
+		// on the value rather than the version would invent a measurement there.
+		switch {
+		case want.PedalPct == nil && o.PedalPct != nil:
+			t.Errorf("record %d pedal_pct = %d, want absent at schema_version %d",
+				seen-1, *o.PedalPct, f.SchemaVersion)
+		case want.PedalPct != nil && o.PedalPct == nil:
+			t.Errorf("record %d pedal_pct absent, want %d", seen-1, *want.PedalPct)
+		case want.PedalPct != nil && *o.PedalPct != *want.PedalPct:
+			t.Errorf("record %d pedal_pct = %d, want %d", seen-1, *o.PedalPct, *want.PedalPct)
+		}
+
 		if want.AbsLoadPct != nil {
 			got, ok := o.AbsoluteLoadPct()
 			if !ok {
@@ -909,6 +941,82 @@ func checkOBDExtVector(t *testing.T, dir string, exp *vectorExpectation) {
 
 	if seen != len(exp.OBDExt.Records) {
 		t.Errorf("found %d OBD_EXTENDED records, want %d", seen, len(exp.OBDExt.Records))
+	}
+}
+
+// checkTimeObsVector holds TIME_OBSERVATION decoding to the vector.
+//
+// The implied basis is checked against the FRAME's monotonic_ms, not a payload
+// field, because that pairing is the whole point of the record: utc_ms minus the
+// frame monotonic is the UTC of monotonic zero the source implies, which is what
+// makes two sources comparable.
+func checkTimeObsVector(t *testing.T, dir string, exp *vectorExpectation) {
+	t.Helper()
+
+	b, err := os.ReadFile(filepath.Join(dir, "segment.bin"))
+	if err != nil {
+		t.Fatalf("read segment.bin: %v", err)
+	}
+
+	res, err := ScanSegment(b, ScanState{}, vectorKeys(t))
+	if err != nil {
+		t.Fatalf("ScanSegment: %v", err)
+	}
+
+	var seen int
+	for i := range res.Frames {
+		f := &res.Frames[i]
+		if f.RecordType != RecordTimeObservation {
+			continue
+		}
+		if seen >= len(exp.TimeObs.Records) {
+			t.Fatalf("segment holds more TIME_OBSERVATION records than expected")
+		}
+		want := exp.TimeObs.Records[seen]
+		seen++
+
+		o, err := ParseTimeObservation(f.Payload)
+		if err != nil {
+			t.Errorf("record %d does not parse: %v", seen-1, err)
+			continue
+		}
+
+		if f.MonotonicMS != want.MonotonicMS {
+			t.Errorf("record %d monotonic_ms = %d, want %d", seen-1, f.MonotonicMS, want.MonotonicMS)
+		}
+		if o.UTCMillis != want.UTCMillis {
+			t.Errorf("record %d utc_ms = %d, want %d", seen-1, o.UTCMillis, want.UTCMillis)
+		}
+		if got := o.Source.String(); got != want.Source {
+			t.Errorf("record %d source = %q, want %q", seen-1, got, want.Source)
+		}
+		if o.Adopted != want.Adopted {
+			t.Errorf("record %d adopted = %v, want %v", seen-1, o.Adopted, want.Adopted)
+		}
+
+		switch {
+		case want.AccuracyMS == nil && o.AccuracyMS != nil:
+			t.Errorf("record %d accuracy_ms = %d, want absent: a source that states no "+
+				"accuracy is not a source claiming zero uncertainty", seen-1, *o.AccuracyMS)
+		case want.AccuracyMS != nil && o.AccuracyMS == nil:
+			t.Errorf("record %d accuracy_ms absent, want %d", seen-1, *want.AccuracyMS)
+		case want.AccuracyMS != nil && *o.AccuracyMS != *want.AccuracyMS:
+			t.Errorf("record %d accuracy_ms = %d, want %d", seen-1, *o.AccuracyMS, *want.AccuracyMS)
+		}
+
+		got, ok := o.ImpliedBasisMS(f.MonotonicMS)
+		switch {
+		case want.ImpliedBasisMS == nil && ok:
+			t.Errorf("record %d implied basis = %d, want uncomputable", seen-1, got)
+		case want.ImpliedBasisMS != nil && !ok:
+			t.Errorf("record %d implied basis uncomputable, want %d", seen-1, *want.ImpliedBasisMS)
+		case want.ImpliedBasisMS != nil && got != *want.ImpliedBasisMS:
+			t.Errorf("record %d implied basis = %d, want %d", seen-1, got, *want.ImpliedBasisMS)
+		}
+	}
+
+	if seen != len(exp.TimeObs.Records) {
+		t.Errorf("found %d TIME_OBSERVATION records, want %d", seen, len(exp.TimeObs.Records))
 	}
 }
 

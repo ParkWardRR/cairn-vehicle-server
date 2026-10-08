@@ -23,6 +23,7 @@ const (
 	sentinelI16 = -0x8000 // 0x8000 read as int16
 	sentinelU8  = 0xFF
 	sentinelI8  = -0x80 // 0x80 read as int8
+	sentinelU32 = 0xFFFFFFFF
 )
 
 // UnavailableU16 and UnavailableI8 report whether a field carries the
@@ -717,4 +718,92 @@ func (o *OBDExtended) AbsoluteLoadPct() (float64, bool) {
 // is the standard way to learn the real ceiling.
 func (o *OBDExtended) MAPSaturated() bool {
 	return o.MAPkPa != nil && *o.MAPkPa >= 255
+}
+
+// TimeSource identifies where a TIME_OBSERVATION came from (spec §4.12.1).
+type TimeSource uint8
+
+const (
+	TimeSourceGNSS         TimeSource = 1
+	TimeSourcePhone        TimeSource = 2
+	TimeSourceModemNetwork TimeSource = 3
+	TimeSourceRTC          TimeSource = 4
+)
+
+func (s TimeSource) String() string {
+	switch s {
+	case TimeSourceGNSS:
+		return "gnss"
+	case TimeSourcePhone:
+		return "phone"
+	case TimeSourceModemNetwork:
+		return "modem_network"
+	case TimeSourceRTC:
+		return "rtc"
+	default:
+		return fmt.Sprintf("unknown(%d)", uint8(s))
+	}
+}
+
+// Known reports whether this implementation understands the source. An unknown
+// source is kept rather than rejected: the observation is still evidence, and a
+// newer device naming a source this build has not heard of is exactly the case
+// the field exists to survive.
+func (s TimeSource) Known() bool {
+	return s >= TimeSourceGNSS && s <= TimeSourceRTC
+}
+
+// TimeObservationAdopted is bit 0 of the flags: this observation is the one the
+// device adopted as the manifest's utc_basis_ms.
+const TimeObservationAdopted = 1 << 0
+
+// TimeObservation is one wall-clock reading from one source, recorded as
+// evidence rather than as a decision (spec §4.12).
+//
+// The monotonic reading of the same instant is the *frame's* monotonic_ms, not a
+// field here, and that pairing is the point: utc_ms minus the frame's monotonic
+// is the UTC of monotonic zero this source implies, so sources can be compared
+// directly and drift within one source is visible across a trip.
+type TimeObservation struct {
+	UTCMillis uint64
+
+	// AccuracyMS is the source's own uncertainty, or nil when it stated none.
+	// Absent is not zero: a source that does not report accuracy is not a source
+	// claiming perfect accuracy.
+	AccuracyMS *uint32
+
+	Source  TimeSource
+	Adopted bool
+}
+
+// ImpliedBasisMS is the UTC of monotonic zero this observation implies, given
+// the monotonic reading of the frame that carried it.
+//
+// Reports false when the monotonic reading is later than the wall clock, which
+// cannot happen on a sane device and would otherwise wrap the subtraction.
+func (o *TimeObservation) ImpliedBasisMS(frameMonotonicMS uint32) (uint64, bool) {
+	if o.UTCMillis < uint64(frameMonotonicMS) {
+		return 0, false
+	}
+	return o.UTCMillis - uint64(frameMonotonicMS), true
+}
+
+// ParseTimeObservation decodes a TIME_OBSERVATION payload.
+func ParseTimeObservation(p []byte) (*TimeObservation, error) {
+	const want = 16
+	if len(p) != want {
+		return nil, fmt.Errorf("TIME_OBSERVATION payload is %d bytes, want %d", len(p), want)
+	}
+
+	var o TimeObservation
+	o.UTCMillis = binary.LittleEndian.Uint64(p[0:8])
+
+	if v := binary.LittleEndian.Uint32(p[8:12]); v != sentinelU32 {
+		o.AccuracyMS = &v
+	}
+
+	o.Source = TimeSource(p[12])
+	o.Adopted = p[13]&TimeObservationAdopted != 0
+
+	return &o, nil
 }
