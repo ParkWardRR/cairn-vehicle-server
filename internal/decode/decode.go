@@ -314,11 +314,11 @@ type TimeObservation struct {
 	Seq         uint32
 	MonotonicMS uint32
 
-	UTCMillis       uint64
-	ImpliedBasisMS  *uint64
-	AccuracyMS      *uint32
-	Source          string
-	Adopted         bool
+	UTCMillis      uint64
+	ImpliedBasisMS *uint64
+	AccuracyMS     *uint32
+	Source         string
+	Adopted        bool
 }
 
 // Trip is the derived journey.
