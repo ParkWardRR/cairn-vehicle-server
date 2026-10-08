@@ -655,6 +655,10 @@ func simulate(apps tsdb.Appenders, rng *rand.Rand, rt route, t *template, style 
 					uint16(load*100), ambC, stftOut, int8(ltft),
 					// tank level: about 1 % per 6 km for a 52 L tank at ~9 L/100 km
 					uint8(math.Max(8, 74-sPos/1000/5.8)),
+					// Pedal position: the driver's demand. Modelled above the plate
+					// angle because a drive-by-wire ECU does not open the plate as far
+					// as the pedal goes, which is the whole reason both are recorded.
+					uint8(math.Min(100, thr*1.25)),
 					(math.Round(mapKpa)-math.Round(baro))/6.895, lam,
 					uint32(0x1FFF), answered, uint16(495+rng.IntN(20))); err != nil {
 					return bundleInfo{}, err

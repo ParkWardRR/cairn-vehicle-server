@@ -568,7 +568,7 @@ func (r *Result) decodeFrame(manifest *format.Manifest, f *format.Frame, segment
 		r.OBD = append(r.OBD, newOBD(manifest, f, s))
 
 	case format.RecordOBDExtended:
-		o, err := format.ParseOBDExtended(f.Payload)
+		o, err := format.ParseOBDExtended(f.Payload, f.SchemaVersion)
 		if err != nil {
 			warn(err)
 			return
@@ -855,6 +855,7 @@ type Boost struct {
 	FuelTrimLongPct  *int8
 
 	FuelLevelPct *uint8
+	PedalPct     *uint8
 
 	// BoostPSI is gauge pressure, derived. Nil when either pressure is absent.
 	BoostPSI *float64
@@ -881,6 +882,7 @@ func newBoost(manifest *format.Manifest, f *format.Frame, o *format.OBDExtended)
 		FuelTrimShortPct: o.FuelTrimShortPct,
 		FuelTrimLongPct:  o.FuelTrimLongPct,
 		FuelLevelPct:     o.FuelLevelPct,
+		PedalPct:         o.PedalPct,
 		PIDsRequested:    o.PIDsRequested,
 		PIDsAnswered:     o.PIDsAnswered,
 		PollCadenceMS:    o.PollCadenceMS,

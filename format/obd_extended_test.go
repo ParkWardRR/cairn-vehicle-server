@@ -24,7 +24,7 @@ func TestOBDExtendedRoundTrip(t *testing.T) {
 	binary.LittleEndian.PutUint16(p[20:], 2000)
 	p[22] = 72 // fuel level 72%
 
-	o, err := ParseOBDExtended(p)
+	o, err := ParseOBDExtended(p, OBDExtendedPedalSchema)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestMAPSaturationIsFlagged(t *testing.T) {
 	binary.LittleEndian.PutUint16(p[0:], 255)
 	p[8] = 101
 
-	o, err := ParseOBDExtended(p)
+	o, err := ParseOBDExtended(p, OBDExtendedPedalSchema)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestMAPSaturationIsFlagged(t *testing.T) {
 
 	// A stock-ish peak must not be flagged.
 	binary.LittleEndian.PutUint16(p[0:], 221)
-	o, _ = ParseOBDExtended(p)
+	o, _ = ParseOBDExtended(p, OBDExtendedPedalSchema)
 	if o.MAPSaturated() {
 		t.Error("221 kPa was flagged as saturated; that is a real reading")
 	}
@@ -106,8 +106,9 @@ func TestOBDExtendedSentinelsAreAbsent(t *testing.T) {
 	p[10] = 0x80
 	p[11] = 0x80
 	p[22] = sentinelU8
+	p[23] = sentinelU8
 
-	o, err := ParseOBDExtended(p)
+	o, err := ParseOBDExtended(p, OBDExtendedPedalSchema)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -115,7 +116,7 @@ func TestOBDExtendedSentinelsAreAbsent(t *testing.T) {
 	if o.MAPkPa != nil || o.BaroKPa != nil || o.LambdaE4 != nil ||
 		o.MAFcgps != nil || o.AbsLoadRaw != nil ||
 		o.AmbientTempC != nil || o.FuelTrimShortPct != nil ||
-		o.FuelTrimLongPct != nil || o.FuelLevelPct != nil {
+		o.FuelTrimLongPct != nil || o.FuelLevelPct != nil || o.PedalPct != nil {
 		t.Error("a sentinel decoded to a value; an unanswered PID must be absent")
 	}
 
@@ -131,7 +132,7 @@ func TestBoostNeedsBothPressures(t *testing.T) {
 	binary.LittleEndian.PutUint16(p[0:], sentinelU16)
 	p[8] = 101
 
-	o, err := ParseOBDExtended(p)
+	o, err := ParseOBDExtended(p, OBDExtendedPedalSchema)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -141,7 +142,57 @@ func TestBoostNeedsBothPressures(t *testing.T) {
 }
 
 func TestOBDExtendedRejectsWrongLength(t *testing.T) {
-	if _, err := ParseOBDExtended(make([]byte, 23)); err == nil {
+	if _, err := ParseOBDExtended(make([]byte, 23), OBDExtendedPedalSchema); err == nil {
 		t.Error("a 23-byte payload was accepted")
+	}
+}
+
+// Byte 23 is pedal position only from schema_version 2. Version 1 put a reserved
+// zero there, and that zero cannot be told from a genuine 0% pedal by value — so
+// the version, not the byte, decides whether the field means anything.
+//
+// pids_requested would be the natural discriminator and is documented as a
+// bitmap, but the firmware has always written a plain count, so it cannot say
+// which PIDs were asked for.
+func TestPedalNeedsSchemaVersion2(t *testing.T) {
+	p := make([]byte, 24)
+	p[23] = 42
+
+	o, err := ParseOBDExtended(p, 1)
+	if err != nil {
+		t.Fatalf("parse v1: %v", err)
+	}
+	if o.PedalPct != nil {
+		t.Errorf("a version 1 record yielded pedal_pct = %d; byte 23 is reserved there",
+			*o.PedalPct)
+	}
+
+	o, err = ParseOBDExtended(p, OBDExtendedPedalSchema)
+	if err != nil {
+		t.Fatalf("parse v2: %v", err)
+	}
+	if o.PedalPct == nil || *o.PedalPct != 42 {
+		t.Errorf("a version 2 record did not yield pedal_pct = 42")
+	}
+
+	// A real closed pedal is zero and must survive as a measurement, which is the
+	// whole reason the version gate exists rather than treating 0 as absent.
+	p[23] = 0
+	o, err = ParseOBDExtended(p, OBDExtendedPedalSchema)
+	if err != nil {
+		t.Fatalf("parse zero: %v", err)
+	}
+	if o.PedalPct == nil || *o.PedalPct != 0 {
+		t.Error("a genuine 0% pedal was dropped; closed throttle is a measurement")
+	}
+
+	// And the sentinel is still absent.
+	p[23] = sentinelU8
+	o, err = ParseOBDExtended(p, OBDExtendedPedalSchema)
+	if err != nil {
+		t.Fatalf("parse sentinel: %v", err)
+	}
+	if o.PedalPct != nil {
+		t.Error("the unavailable sentinel decoded to a value")
 	}
 }

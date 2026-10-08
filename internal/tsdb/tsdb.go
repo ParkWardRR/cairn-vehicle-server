@@ -393,7 +393,7 @@ func appendResult(apps map[string]*duckdb.Appender, ref Ref, res *decode.Result,
 		if err := row("boost", veh(b.VehicleID), root, boot, b.MonotonicMS, b.Seq, b.ObservedAt,
 			opt(b.MAPkPa), opt(b.BaroKPa), opt(b.MAFcgps), opt(b.LambdaE4), opt(b.AbsLoadRaw),
 			opt(b.AmbientTempC), opt(b.FuelTrimShortPct), opt(b.FuelTrimLongPct),
-			opt(b.FuelLevelPct),
+			opt(b.FuelLevelPct), opt(b.PedalPct),
 			opt(b.BoostPSI), opt(b.Lambda),
 			b.PIDsRequested, b.PIDsAnswered, b.PollCadenceMS); err != nil {
 			return expected{}, err

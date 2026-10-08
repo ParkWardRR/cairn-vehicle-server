@@ -838,7 +838,7 @@ func checkOBDExtVector(t *testing.T, dir string, exp *vectorExpectation) {
 		want := exp.OBDExt.Records[seen]
 		seen++
 
-		o, err := ParseOBDExtended(f.Payload)
+		o, err := ParseOBDExtended(f.Payload, f.SchemaVersion)
 		if err != nil {
 			t.Errorf("record %d does not parse: %v", seen-1, err)
 			continue

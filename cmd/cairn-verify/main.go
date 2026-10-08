@@ -1044,7 +1044,7 @@ func collectBoost(res *bundleResult, sr *format.ScanResult) {
 			continue
 		}
 
-		o, err := format.ParseOBDExtended(f.Payload)
+		o, err := format.ParseOBDExtended(f.Payload, f.SchemaVersion)
 		if err != nil {
 			res.fail("an OBD_EXTENDED record at seq %d does not parse: %v",
 				f.Seq, err)

@@ -578,6 +578,22 @@ type OBDExtended struct {
 	PollCadenceMS uint16
 
 	FuelLevelPct *uint8
+
+	// PedalPct is accelerator pedal position, PID 0x49 — the driver's demand.
+	//
+	// Not interchangeable with OBDSnapshot.ThrottlePct, which is PID 0x11, the
+	// throttle *plate* angle: on a drive-by-wire engine the ECU opens the plate
+	// as far as it decides rather than as far as the pedal travelled, so it does
+	// not reach 100% at wide-open throttle. Measured on an N20, 77% was the
+	// highest throttle_pct anywhere in a 1002 s drive and it read 32% during the
+	// sample that caught 8.6 psi at 4142 rpm. Only pedal position identifies a
+	// pull as wide open.
+	//
+	// This field took the record's last reserved byte, so bundles sealed before
+	// it was defined carry 0x00 here, which no value check can tell from a
+	// genuine 0% pedal. Consult PIDsRequested: a field never asked for carries no
+	// measurement whatever the byte says.
+	PedalPct *uint8
 }
 
 // BoostGaugeKPa returns gauge pressure — boost above ambient — and whether it
@@ -611,7 +627,19 @@ func (o *OBDExtended) Lambda() (float64, bool) {
 }
 
 // ParseOBDExtended decodes §4.10.
-func ParseOBDExtended(p []byte) (*OBDExtended, error) {
+// OBDExtendedPedalSchema is the record schema_version from which byte 23 carries
+// pedal_pct. Version 1 had a reserved zero there.
+//
+// Keying on the version is what makes reclaiming that byte safe. A version 1
+// zero is indistinguishable by value from a genuine 0% pedal, and the obvious
+// discriminator does not work: pids_requested is documented as a bitmap but the
+// firmware has always written a plain count, so it cannot say which PIDs were
+// asked for.
+const OBDExtendedPedalSchema = 2
+
+// ParseOBDExtended decodes the record. schemaVersion is the frame's, and decides
+// whether byte 23 is read as pedal position or ignored as reserved.
+func ParseOBDExtended(p []byte, schemaVersion uint8) (*OBDExtended, error) {
 	const want = 24
 	if len(p) != want {
 		return nil, fmt.Errorf("OBD_EXTENDED payload is %d bytes, want %d", len(p), want)
@@ -650,6 +678,11 @@ func ParseOBDExtended(p []byte) (*OBDExtended, error) {
 
 	if v := p[22]; v != sentinelU8 {
 		o.FuelLevelPct = &v
+	}
+	if schemaVersion >= OBDExtendedPedalSchema {
+		if v := p[23]; v != sentinelU8 {
+			o.PedalPct = &v
+		}
 	}
 
 	return &o, nil
