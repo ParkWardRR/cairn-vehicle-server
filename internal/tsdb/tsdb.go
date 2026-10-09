@@ -120,6 +120,9 @@ type Report struct {
 	// Derived records which module defined which column.
 	Derived []DerivedColumn `json:"derived,omitempty"`
 
+	// ModuleViews records which module created which view, in creation order.
+	ModuleViews []ModuleView `json:"module_views,omitempty"`
+
 	// Problems are the reproducibility failures. A build with any is not served
 	// by default: numbers that did not reproduce are worse than no numbers.
 	Problems []string `json:"problems,omitempty"`
@@ -191,6 +194,12 @@ func Build(ctx context.Context, snap *Snapshot, notes []string, opts Options) (*
 	}
 	if _, err := sdb.ExecContext(ctx, viewsSQL); err != nil {
 		return fail(fmt.Errorf("views: %w", err))
+	}
+
+	// Module views come after the core's, so a module view may read one. The reverse is
+	// not allowed to become possible: the core has to build with no module set at all.
+	if err := createModuleViews(ctx, sdb, opts.Modules, &report); err != nil {
+		return fail(err)
 	}
 
 	// Export snapshot before lockdown — COPY TO needs external access enabled.
