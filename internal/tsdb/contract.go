@@ -35,6 +35,7 @@ import (
 //   - the time_obs table: wall-clock observations, one row per source per reading
 //     (section 4.12). It has no observed_at, because a row whose job is to establish
 //     the time cannot be stamped with the time it is establishing.
+//
 // store/v1.4 redefines what a row of v_trip_summary is: a TRIP, meaning an outing,
 // rather than a (vehicle, boot) pair. Minor rather than major because this contract
 // pins columns and types, and every one of v1.3's nineteen is still present under

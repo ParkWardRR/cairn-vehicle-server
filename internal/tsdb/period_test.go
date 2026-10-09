@@ -341,7 +341,6 @@ func TestTripPeriodView(t *testing.T) {
 	})
 }
 
-
 // The errand that found this bug: home -> Trader Joe's -> Pavillions -> home,
 // which the dashboard showed as TWO trips, one of them claiming seven hours.
 //
