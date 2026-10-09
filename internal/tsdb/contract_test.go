@@ -3,6 +3,7 @@ package tsdb
 import (
 	"context"
 	"database/sql"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -141,5 +142,73 @@ func TestFingerprintMovesWithTheSchema(t *testing.T) {
 	}
 	if macro.Fingerprint == before.Fingerprint {
 		t.Fatal("changing a macro did not change the fingerprint")
+	}
+}
+
+// Every table the schema declares must have an appender, because a bundle load
+// writes through appenders and nothing checks the map lookup.
+//
+// This is a structural test rather than another data case on purpose. time_obs
+// was added to the schema and to the insert path but not to bundleTables, so
+// apps["time_obs"] was nil and the first bundle carrying a TIME_OBSERVATION
+// record nil-dereferenced inside the DuckDB driver -- taking the whole query
+// store into a crash loop on a live host. Every test passed, because no test
+// built a decode result containing that record. A list that must agree with the
+// schema should be checked against the schema, not against a sample of data.
+func TestEveryTableHasAnAppender(t *testing.T) {
+	// Tables a bundle load never writes to would go here, with the reason. None
+	// today: `tune` is written from the vehicle registry but still through an
+	// appender, so it is in the list.
+	exempt := map[string]bool{}
+
+	re := regexp.MustCompile(`(?m)^CREATE TABLE ([a-z_]+)`)
+	declared := re.FindAllStringSubmatch(schemaSQL, -1)
+	if len(declared) == 0 {
+		t.Fatal("no CREATE TABLE found in schemaSQL; this test is not checking anything")
+	}
+
+	have := map[string]bool{}
+	for _, tbl := range bundleTables {
+		have[tbl] = true
+	}
+
+	for _, m := range declared {
+		name := m[1]
+		if exempt[name] {
+			continue
+		}
+		if !have[name] {
+			t.Errorf("table %q is in the schema but not in bundleTables, so it gets no "+
+				"appender and a bundle carrying its records will nil-deref in the driver",
+				name)
+		}
+	}
+
+	// And nothing in the list that the schema does not declare: an appender for a
+	// table that does not exist fails at open, which is louder but still wrong.
+	declaredSet := map[string]bool{}
+	for _, m := range declared {
+		declaredSet[m[1]] = true
+	}
+	for _, tbl := range bundleTables {
+		if !declaredSet[tbl] {
+			t.Errorf("bundleTables names %q, which the schema does not declare", tbl)
+		}
+	}
+}
+
+// sampleTables is sorted by (vehicle_id, boot_id, mono_ms, seq) after a load, so
+// every table in it must actually have those columns.
+func TestSampleTablesCanBeSorted(t *testing.T) {
+	for _, tbl := range sampleTables {
+		found := false
+		for _, b := range bundleTables {
+			if b == tbl {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("sampleTables names %q, which is not a bundle table", tbl)
+		}
 	}
 }

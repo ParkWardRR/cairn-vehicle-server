@@ -151,13 +151,19 @@ CREATE TABLE tune (
 `
 
 // bundleTables are every table the loader fills, in the order the appenders are opened.
-var bundleTables = []string{"bundles", "position", "imu", "obd", "boost", "status", "transition", "gap", "tune"}
+// bundleTables is every table a bundle load writes to, and therefore every table
+// that needs a DuckDB appender. A table missing from here has no appender, and the
+// insert nil-dereferences inside the driver the first time a bundle carries that
+// record -- which is how time_obs took the store down in a crash loop on
+// 2026-10-08. TestEveryTableHasAnAppender ties this list to the schema so the two
+// cannot drift again.
+var bundleTables = []string{"bundles", "position", "imu", "obd", "boost", "status", "transition", "gap", "time_obs", "tune"}
 
 // sampleTables are the tables physically ordered by (vehicle_id, boot_id,
 // mono_ms) once a load finishes. Sorting is what lets DuckDB's min/max zone
 // maps skip row groups on a time-range predicate and what keeps an ASOF join a
 // streaming merge rather than a hash build.
-var sampleTables = []string{"position", "imu", "obd", "boost", "status", "transition"}
+var sampleTables = []string{"position", "imu", "obd", "boost", "status", "transition", "time_obs"}
 
 // viewsSQL are the canned analysis surfaces.
 //
