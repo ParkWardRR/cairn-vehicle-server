@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -37,6 +38,8 @@ import (
 // to print them, and a hash over a printed float is a hash over a disagreement).
 // Timestamps are epoch milliseconds, speeds are cm/s, distance is whole metres.
 const tripSummarySQL = `SELECT vehicle_id, boot_id, device_id,
+  CAST(driving_ms AS BIGINT) AS driving_ms,
+  CAST(leg_count AS BIGINT) AS leg_count,
   CAST(epoch_ms(started_at) AS BIGINT) AS started_ms,
   CAST(epoch_ms(ended_at)   AS BIGINT) AS ended_ms,
   CAST(duration_ms AS BIGINT) AS duration_ms,
@@ -56,22 +59,26 @@ FROM v_trip_summary ORDER BY vehicle_id, started_ms`
 // tripSummary is the entity payload. Field order is fixed by the struct, so the
 // same trip always marshals to the same bytes and the content digest is stable.
 type tripSummary struct {
-	BootID          string `json:"boot_id"`
-	DeviceID        string `json:"device_id"`
-	StartedMS       int64  `json:"started_ms"`
-	EndedMS         int64  `json:"ended_ms"`
-	DurationMS      int64  `json:"duration_ms"`
-	DistanceM       int64  `json:"distance_m"`
-	MaxGNSSSpeedCMS int64  `json:"max_gnss_speed_cmps"`
-	MaxOBDSpeedCMS  int64  `json:"max_obd_speed_cmps"`
-	MaxRPM          int64  `json:"max_rpm"`
-	OBDSamples      int64  `json:"obd_samples"`
-	GNSSSamples     int64  `json:"gnss_samples"`
-	BoostSamples    int64  `json:"boost_samples"`
-	GapCount        int64  `json:"gap_count"`
-	GapDurationMS   int64  `json:"gap_duration_ms"`
-	BundleCount     int64  `json:"bundle_count"`
-	DecoderVersion  int64  `json:"decoder_version"`
+	BootID     string `json:"boot_id"`
+	DeviceID   string `json:"device_id"`
+	StartedMS  int64  `json:"started_ms"`
+	EndedMS    int64  `json:"ended_ms"`
+	DurationMS int64  `json:"duration_ms"`
+	// DrivingMS counts only the moving parts of the outing and LegCount how many
+	// drives it contains; DurationMS is the wall-clock span including the stops.
+	DrivingMS       int64 `json:"driving_ms"`
+	LegCount        int64 `json:"leg_count"`
+	DistanceM       int64 `json:"distance_m"`
+	MaxGNSSSpeedCMS int64 `json:"max_gnss_speed_cmps"`
+	MaxOBDSpeedCMS  int64 `json:"max_obd_speed_cmps"`
+	MaxRPM          int64 `json:"max_rpm"`
+	OBDSamples      int64 `json:"obd_samples"`
+	GNSSSamples     int64 `json:"gnss_samples"`
+	BoostSamples    int64 `json:"boost_samples"`
+	GapCount        int64 `json:"gap_count"`
+	GapDurationMS   int64 `json:"gap_duration_ms"`
+	BundleCount     int64 `json:"bundle_count"`
+	DecoderVersion  int64 `json:"decoder_version"`
 }
 
 // TripPublisher publishes trip_summary entities from cairn-tsdb.
@@ -124,7 +131,7 @@ func (p *TripPublisher) Once(ctx context.Context) (int, error) {
 	for i, c := range res.Columns {
 		col[c] = i
 	}
-	for _, need := range []string{"vehicle_id", "boot_id", "device_id", "started_ms", "ended_ms", "duration_ms",
+	for _, need := range []string{"vehicle_id", "boot_id", "device_id", "driving_ms", "leg_count", "started_ms", "ended_ms", "duration_ms",
 		"distance_m", "max_gnss_speed_cmps", "max_obd_speed_cmps", "max_rpm", "obd_samples", "gnss_samples",
 		"boost_samples", "gap_count", "gap_duration_ms", "bundle_count", "decoder_version"} {
 		if _, ok := col[need]; !ok {
@@ -156,12 +163,16 @@ func (p *TripPublisher) Once(ctx context.Context) (int, error) {
 
 	changed := 0
 	for _, r := range res.Rows {
+		// boot_id is informational now, so an outing with no OBD rows -- and so
+		// no boot to name -- must still publish. Only the vehicle and the start
+		// are required, because together they are the identity.
 		vehicle, boot := strings.ToLower(str(r, "vehicle_id")), str(r, "boot_id")
-		if vehicle == "" || boot == "" {
+		if vehicle == "" || integer(r, "started_ms") == 0 {
 			continue
 		}
 		data, err := json.Marshal(tripSummary{
 			BootID: boot, DeviceID: str(r, "device_id"),
+			DrivingMS: integer(r, "driving_ms"), LegCount: integer(r, "leg_count"),
 			StartedMS: integer(r, "started_ms"), EndedMS: integer(r, "ended_ms"), DurationMS: integer(r, "duration_ms"),
 			DistanceM:       integer(r, "distance_m"),
 			MaxGNSSSpeedCMS: integer(r, "max_gnss_speed_cmps"), MaxOBDSpeedCMS: integer(r, "max_obd_speed_cmps"),
@@ -173,7 +184,21 @@ func (p *TripPublisher) Once(ctx context.Context) (int, error) {
 		if err != nil {
 			return changed, err
 		}
-		_, did, err := p.Store.Publish(Entity{Type: EntityTypeTripSummary, ID: vehicle + ":" + boot, VehicleID: vehicle, Data: data})
+		/*
+		 * Keyed on the trip's start, not on the boot.
+		 *
+		 * A boot is an artifact of when the car cut power to the dongle, and
+		 * keying on it published one errand as several trips while merging two
+		 * drives that happened to share a boot into one. The trip is now an
+		 * outing (contracts/sync/v1 §trip_summary), so its identity has to be
+		 * something the outing owns: its first observation.
+		 *
+		 * That means a trip can be re-keyed if an earlier part of it arrives
+		 * late. The spec says so and tells consumers to reconcile on the
+		 * overlapping span rather than on the id alone.
+		 */
+		id := vehicle + ":" + strconv.FormatInt(integer(r, "started_ms"), 10)
+		_, did, err := p.Store.Publish(Entity{Type: EntityTypeTripSummary, ID: id, VehicleID: vehicle, Data: data})
 		if err != nil {
 			return changed, fmt.Errorf("publish trip %s:%s: %w", vehicle, boot, err)
 		}

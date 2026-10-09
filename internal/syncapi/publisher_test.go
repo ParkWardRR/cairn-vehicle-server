@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-const tsdbCols = `["vehicle_id","boot_id","device_id","started_ms","ended_ms","duration_ms","distance_m","max_gnss_speed_cmps","max_obd_speed_cmps","max_rpm","obd_samples","gnss_samples","boost_samples","gap_count","gap_duration_ms","bundle_count","decoder_version"]`
+const tsdbCols = `["vehicle_id","boot_id","device_id","driving_ms","leg_count","started_ms","ended_ms","duration_ms","distance_m","max_gnss_speed_cmps","max_obd_speed_cmps","max_rpm","obd_samples","gnss_samples","boost_samples","gap_count","gap_duration_ms","bundle_count","decoder_version"]`
 
 func fakeTSDB(t *testing.T, rows *atomic.Value) *httptest.Server {
 	t.Helper()
@@ -32,8 +32,8 @@ func TestPublisherPublishesIdempotentlyAndPerVehicle(t *testing.T) {
 	// The registry's own vehicle ids, so scope filtering is exercised for real.
 	var rows atomic.Value
 	rows.Store(`[
-	  ["` + e.n20.ID + `","bootA","dev1",1790000000000,1790000600000,600000,5230,2410,2500,6100,300,590,300,1,4000,1,3],
-	  ["` + e.b58.ID + `","bootB","dev1",1790001000000,1790001300000,300000,2100,3100,3200,5200,150,290,150,0,0,1,3]
+	  ["` + e.n20.ID + `","bootA","dev1",540000,3,1790000000000,1790000600000,600000,5230,2410,2500,6100,300,590,300,1,4000,1,3],
+	  ["` + e.b58.ID + `","bootB","dev1",300000,1,1790001000000,1790001300000,300000,2100,3100,3200,5200,150,290,150,0,0,1,3]
 	]`)
 	up := fakeTSDB(t, &rows)
 	pub := &TripPublisher{URL: up.URL, Store: e.store}
@@ -61,8 +61,11 @@ func TestPublisherPublishesIdempotentlyAndPerVehicle(t *testing.T) {
 		t.Fatalf("an N20-scoped client received %d trips, want exactly 1", len(trips))
 	}
 	c := trips[0]
-	if c.VehicleID != e.n20.ID || c.EntityID != e.n20.ID+":bootA" {
-		t.Fatalf("got vehicle %q entity %q, want the N20's bootA trip", c.VehicleID, c.EntityID)
+	// Keyed on the trip's start, not its boot: a boot is an artifact of when the
+	// car cut power, and TestTripEntityIDIsTheStartNotTheBoot holds that apart.
+	if c.VehicleID != e.n20.ID || c.EntityID != e.n20.ID+":1790000000000" {
+		t.Fatalf("got vehicle %q entity %q, want the N20's trip keyed on its start",
+			c.VehicleID, c.EntityID)
 	}
 	var d map[string]any
 	if err := json.Unmarshal(c.Data, &d); err != nil {
@@ -91,7 +94,7 @@ func TestPublisherPublishesIdempotentlyAndPerVehicle(t *testing.T) {
 	}
 
 	// A reprocessed trip (more samples) publishes a new version of the same entity.
-	rows.Store(`[["` + e.n20.ID + `","bootA","dev1",1790000000000,1790000600000,600000,5230,2410,2500,6100,310,590,300,1,4000,1,4]]`)
+	rows.Store(`[["` + e.n20.ID + `","bootA","dev1",540000,3,1790000000000,1790000600000,600000,5230,2410,2500,6100,310,590,300,1,4000,1,4]]`)
 	changed, err = pub.Once(context.Background())
 	if err != nil || changed != 1 {
 		t.Fatalf("after reprocessing = %d, %v; want exactly the changed trip", changed, err)
@@ -118,5 +121,49 @@ func TestPublisherSurvivesAnUnavailableStore(t *testing.T) {
 	e := newEnv(t)
 	if _, err := (&TripPublisher{URL: up.URL, Store: e.store}).Once(context.Background()); err == nil {
 		t.Fatal("a 503 from the analytical store was treated as success")
+	}
+}
+
+// The entity id is the trip's start, not its boot.
+//
+// It used to be <vehicle>:<boot_id>, which published one errand as several trips
+// (a shop stop that cuts the ignition starts a new boot) and merged two drives
+// that shared a boot into one. A trip is an outing now, so its identity has to be
+// something the outing owns.
+//
+// Two trips from the SAME boot must therefore be two entities, and that is the
+// case the old key got wrong in the direction nobody notices: it silently
+// published one.
+func TestTripEntityIDIsTheStartNotTheBoot(t *testing.T) {
+	e := newEnv(t)
+	var rows atomic.Value
+	rows.Store(`[
+	  ["` + e.n20.ID + `","sameboot","dev1",420000,1,1790000000000,1790000420000,420000,2100,2410,2500,6100,100,200,100,0,0,1,3],
+	  ["` + e.n20.ID + `","sameboot","dev1",730000,1,1790002000000,1790002730000,730000,4100,2410,2500,6100,200,400,200,0,0,1,3]
+	]`)
+	pub := &TripPublisher{URL: fakeTSDB(t, &rows).URL, Store: e.store}
+
+	changed, err := pub.Once(context.Background())
+	if err != nil || changed != 2 {
+		t.Fatalf("published %d, %v; want 2: two outings from one boot are two trips", changed, err)
+	}
+
+	all := e.enrol("user", "*")
+	ids := map[string]bool{}
+	for _, c := range pull(t, all, "").Changes {
+		if c.EntityType == EntityTypeTripSummary {
+			ids[c.EntityID] = true
+		}
+	}
+	if len(ids) != 2 {
+		t.Fatalf("got entity ids %v, want two distinct ones keyed on started_ms", ids)
+	}
+	for _, want := range []string{
+		strings.ToLower(e.n20.ID) + ":1790000000000",
+		strings.ToLower(e.n20.ID) + ":1790002000000",
+	} {
+		if !ids[want] {
+			t.Errorf("missing entity id %q; ids are keyed on the trip start", want)
+		}
 	}
 }
