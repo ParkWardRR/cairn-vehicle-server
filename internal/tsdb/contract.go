@@ -35,10 +35,21 @@ import (
 //   - the time_obs table: wall-clock observations, one row per source per reading
 //     (section 4.12). It has no observed_at, because a row whose job is to establish
 //     the time cannot be stamped with the time it is establishing.
-const StoreContract = "store/v1.3"
+// store/v1.4 redefines what a row of v_trip_summary is: a TRIP, meaning an outing,
+// rather than a (vehicle, boot) pair. Minor rather than major because this contract
+// pins columns and types, and every one of v1.3's nineteen is still present under
+// the same type -- grain is pinned by contracts/sync/v1, which changes with it. The
+// new columns are trip_id, driving_ms and leg_count, and the new view v_trip_leg
+// exposes the device's own per-leg boundaries.
+//
+// The old grain was wrong in both directions. A shop stop that cuts the ignition
+// starts a new boot, so one errand split into several trips; and two legs inside one
+// boot collapsed into one row spanning the stop between them. Measured: home ->
+// Trader Joe's -> Pavillions -> home showed as two rows, one claiming seven hours.
+const StoreContract = "store/v1.4"
 
 // schemaFingerprint is the fingerprint of the schema StoreContract describes.
-const schemaFingerprint = "cb398391d2506f25d8b034c36fdbc2eb86ae48af1379effd6a4f4d2a06aadeb8"
+const schemaFingerprint = "4bd014a21244e86f4d9f3c921c864664536a97ebce6460062e5899e8f4cfef5c"
 
 // Capabilities is what a running store offers: the objects present in its database.
 type Capabilities struct {

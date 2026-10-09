@@ -261,33 +261,133 @@ LEFT JOIN gnss g   ON g.vehicle_id = d.vehicle_id AND g.boot_id = d.boot_id
 LEFT JOIN gaps gp  ON gp.vehicle_id = d.vehicle_id AND gp.boot_id = d.boot_id
 LEFT JOIN warns w  ON w.vehicle_id = d.vehicle_id AND w.boot_id = d.boot_id;
 
--- One row per (vehicle, boot) with whatever was observed, not only OBD: a
--- drive with no ECU answering still happened. This is what cairn-server's
--- trip_summary publisher reads. Distance sums great-circle steps between
--- consecutive device fixes no more than 5 s apart — the decoder's own bridging
--- rule — so an interruption is never crossed with a straight line.
+-- A leg is one continuous drive, as the *device* detected it: from the capture
+-- region entering Active to the Trailing->Idle that ends the dwell. The firmware
+-- is the authority here and it is good at this -- an errand of three shop stops
+-- produced exactly three legs, correctly bounded, even though it spanned a power
+-- cycle.
+--
+-- Active and Trailing flap constantly while driving (a traffic light is a stop),
+-- so a leg is NOT one Active span: it opens at the first entry to Active and
+-- closes only at the Trailing->Idle that actually expires the dwell. Measured on
+-- real data: 909 Active->Trailing flaps against 4 genuine leg starts.
+--
+-- Transitions with no UTC basis are excluded. A transition that cannot be placed
+-- on a timeline cannot bound a trip, and mixing undated rows into the grouping
+-- below silently swallows real legs.
+--
+-- closed_at is null for a leg cut short by power loss. Such a leg is still real
+-- and still listed; a consumer wanting its end should fall back to the last
+-- observation of that boot.
+CREATE VIEW v_trip_leg AS
+WITH t AS (
+    SELECT vehicle_id, boot_id, observed_at, seq, to_state,
+           CASE WHEN from_state = 3 AND to_state = 0 THEN 1 ELSE 0 END AS closes
+    FROM transition
+    WHERE region = 1 AND observed_at > TIMESTAMP '2000-01-01'
+),
+g AS (
+    SELECT *, coalesce(sum(closes) OVER (PARTITION BY vehicle_id ORDER BY observed_at, seq
+                 ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), 0) AS leg_group
+    FROM t
+)
+SELECT vehicle_id,
+       min(CASE WHEN to_state = 2 THEN observed_at END) AS started_at,
+       max(CASE WHEN closes = 1 THEN observed_at END)   AS closed_at,
+       arg_min(boot_id, CASE WHEN to_state = 2 THEN observed_at END) AS boot_id
+FROM g
+GROUP BY vehicle_id, leg_group
+HAVING min(CASE WHEN to_state = 2 THEN observed_at END) IS NOT NULL;
+
+-- One row per TRIP, where a trip is an outing: consecutive legs merged across any
+-- stop shorter than the threshold below. This is what cairn-server's trip_summary
+-- publisher reads.
+--
+-- It used to be one row per (vehicle, boot), which was wrong in both directions.
+-- A shop stop that cuts the ignition starts a new boot, so one errand split into
+-- several "trips"; and two legs inside one boot collapsed into a single row whose
+-- span covered the stop between them. Measured: home -> Trader Joe's ->
+-- Pavillions -> home showed as two rows, one of which claimed seven hours.
+-- boot_id is still reported -- it is the boot the trip started in -- but it is no
+-- longer the key, because when the device power-cycles is not a fact about the
+-- driving.
+--
+-- THE 20 MINUTE THRESHOLD IS THE ONE KNOB. Stops shorter than this are part of
+-- the trip; longer, and the next leg starts a new one. Chosen from the real
+-- errand (stops of 9.9 and 7.0 minutes, which must merge) against the longest
+-- in-trip data gap ever measured (46 s, so there is no risk of splitting mid-leg).
+-- Raise it if shopping trips still split; lower it if separate outings merge.
+--
+-- duration_ms is the wall-clock span including the stops, which is what "8:28 PM
+-- to 9:17 PM" means to a reader. driving_ms is the legs only, so the two together
+-- say how much of an outing was spent moving.
+--
+-- Distance sums great-circle steps between consecutive device fixes no more than
+-- 5 s apart -- the decoder's own bridging rule -- so an interruption is never
+-- crossed with a straight line. The step window stays partitioned by boot because
+-- mono_ms is only comparable within one; the steps are then summed per trip.
 CREATE VIEW v_trip_summary AS
+-- Trips come from the samples, not from the transitions, because samples are
+-- always there. position/obd/imu are written only while the capture is awake, so
+-- their presence IS the motion signal and their absence IS the stop -- which
+-- makes the structure enormous: on a real errand the largest gap inside a leg was
+-- 4.3 s, against 404 s for the shortest shop stop. A ~94x margin means the
+-- threshold is not a delicate tuning problem.
+--
+-- status is deliberately excluded. It keeps ticking every 30 s while parked, so
+-- including it merges everything: the same data sessionised with status in it
+-- yields one 7-hour "trip" from 8:26 PM to 3:30 AM.
+--
+-- v_trip_leg is the device's own, better-grounded view of leg boundaries and
+-- agrees with this to the second. It is not used here on purpose: a bundle whose
+-- transitions were lost, or predate the UTC basis working, still has samples and
+-- must still appear as a trip.
 WITH obs AS (
-    SELECT vehicle_id, boot_id, mono_ms, observed_at FROM position
-    UNION ALL SELECT vehicle_id, boot_id, mono_ms, observed_at FROM obd
-    UNION ALL SELECT vehicle_id, boot_id, mono_ms, observed_at FROM imu
-    UNION ALL SELECT vehicle_id, boot_id, mono_ms, observed_at FROM status
+    -- A sample with no wall clock cannot be placed on a timeline, so it cannot
+    -- belong to a trip. It is dropped here rather than allowed to anchor one.
+    SELECT vehicle_id, observed_at FROM position WHERE observed_at IS NOT NULL
+    UNION ALL SELECT vehicle_id, observed_at FROM obd WHERE observed_at IS NOT NULL
+    UNION ALL SELECT vehicle_id, observed_at FROM imu WHERE observed_at IS NOT NULL
+),
+marked AS (
+    SELECT vehicle_id, observed_at,
+           CASE WHEN lag(observed_at) OVER w IS NULL
+                  OR observed_at - lag(observed_at) OVER w > INTERVAL 20 MINUTE
+                THEN 1 ELSE 0 END AS opens_trip
+    FROM obs
+    WINDOW w AS (PARTITION BY vehicle_id ORDER BY observed_at)
+),
+numbered AS (
+    SELECT *, sum(opens_trip) OVER (PARTITION BY vehicle_id ORDER BY observed_at) AS trip_no
+    FROM marked
 ),
 t_span AS (
-    SELECT vehicle_id, boot_id,
-           min(observed_at) AS started_at, max(observed_at) AS ended_at,
-           CAST(max(mono_ms) AS BIGINT) - CAST(min(mono_ms) AS BIGINT) AS duration_ms
-    FROM obs GROUP BY vehicle_id, boot_id
+    SELECT vehicle_id, trip_no,
+           min(observed_at) AS started_at, max(observed_at) AS ended_at
+    FROM numbered GROUP BY vehicle_id, trip_no
+),
+-- The device's own legs that fall inside this trip, for leg_count and driving_ms.
+-- Null rather than zero when the device recorded no transitions: "not reported"
+-- and "drove for no time" are different claims.
+t_legs AS (
+    SELECT s.vehicle_id, s.trip_no, count(*) AS leg_count,
+           CAST(sum(CASE WHEN l.closed_at IS NULL THEN 0
+                         ELSE epoch_ms(l.closed_at) - epoch_ms(l.started_at) END) AS BIGINT) AS driving_ms
+    FROM v_trip_leg l JOIN t_span s
+      ON s.vehicle_id = l.vehicle_id AND l.started_at BETWEEN s.started_at AND s.ended_at
+    GROUP BY 1, 2
 ),
 t_fixes AS (
-    SELECT vehicle_id, boot_id, mono_ms, lat, lon, speed_mps,
-           lag(mono_ms) OVER w AS prev_ms, lag(lat) OVER w AS prev_lat, lag(lon) OVER w AS prev_lon
-    FROM position
-    WHERE fix_type > 0 AND coalesce(source_flags, 0) & 32 = 0
-    WINDOW w AS (PARTITION BY vehicle_id, boot_id ORDER BY mono_ms, seq)
+    SELECT s.vehicle_id, s.trip_no, p.mono_ms, p.lat, p.lon, p.speed_mps,
+           lag(p.mono_ms) OVER w AS prev_ms,
+           lag(p.lat) OVER w AS prev_lat, lag(p.lon) OVER w AS prev_lon
+    FROM position p JOIN t_span s
+      ON s.vehicle_id = p.vehicle_id AND p.observed_at BETWEEN s.started_at AND s.ended_at
+    WHERE p.fix_type > 0 AND coalesce(p.source_flags, 0) & 32 = 0
+    WINDOW w AS (PARTITION BY s.vehicle_id, s.trip_no, p.boot_id ORDER BY p.mono_ms, p.seq)
 ),
 t_gnss AS (
-    SELECT vehicle_id, boot_id,
+    SELECT vehicle_id, trip_no,
            count(*) AS fix_samples,
            max(speed_mps) AS max_gnss_speed_mps,
            coalesce(sum(CASE WHEN prev_ms IS NOT NULL AND mono_ms - prev_ms <= 5000
@@ -295,37 +395,65 @@ t_gnss AS (
                    pow(sin(radians(lat - prev_lat) / 2), 2) +
                    cos(radians(prev_lat)) * cos(radians(lat)) * pow(sin(radians(lon - prev_lon) / 2), 2)))
                ELSE 0 END), 0) AS distance_m
-    FROM t_fixes GROUP BY vehicle_id, boot_id
+    FROM t_fixes GROUP BY vehicle_id, trip_no
 ),
 t_pos AS (
-    SELECT vehicle_id, boot_id,
-           count(*) FILTER (WHERE coalesce(source_flags, 0) & 32 = 0) AS gnss_samples
-    FROM position GROUP BY vehicle_id, boot_id
+    SELECT s.vehicle_id, s.trip_no,
+           count(*) FILTER (WHERE coalesce(p.source_flags, 0) & 32 = 0) AS gnss_samples
+    FROM position p JOIN t_span s
+      ON s.vehicle_id = p.vehicle_id AND p.observed_at BETWEEN s.started_at AND s.ended_at
+    GROUP BY 1, 2
 ),
 t_eng AS (
-    SELECT vehicle_id, boot_id, count(*) AS obd_samples,
-           max(speed_kph) AS max_obd_speed_kph, max(rpm) AS max_rpm
-    FROM obd GROUP BY vehicle_id, boot_id
+    SELECT s.vehicle_id, s.trip_no, count(*) AS obd_samples,
+           max(o.speed_kph) AS max_obd_speed_kph, max(o.rpm) AS max_rpm
+    FROM obd o JOIN t_span s
+      ON s.vehicle_id = o.vehicle_id AND o.observed_at BETWEEN s.started_at AND s.ended_at
+    GROUP BY 1, 2
 ),
 t_bst AS (
-    SELECT vehicle_id, boot_id, count(*) AS boost_samples
-    FROM boost GROUP BY vehicle_id, boot_id
+    SELECT s.vehicle_id, s.trip_no, count(*) AS boost_samples
+    FROM boost b JOIN t_span s
+      ON s.vehicle_id = b.vehicle_id AND b.observed_at BETWEEN s.started_at AND s.ended_at
+    GROUP BY 1, 2
 ),
 t_gaps AS (
-    SELECT vehicle_id, boot_id, count(*) AS gap_count,
-           coalesce(sum(duration_ms), 0) AS gap_duration_ms
-    FROM gap GROUP BY vehicle_id, boot_id
+    SELECT s.vehicle_id, s.trip_no, count(*) AS gap_count,
+           coalesce(sum(gg.duration_ms), 0) AS gap_duration_ms
+    FROM gap gg JOIN t_span s
+      ON s.vehicle_id = gg.vehicle_id AND gg.started_at BETWEEN s.started_at AND s.ended_at
+    GROUP BY 1, 2
 ),
+-- The boot the trip started in. Still reported because it is useful, but no
+-- longer the key: when the device power-cycles is not a fact about the driving.
+t_boot AS (
+    SELECT s.vehicle_id, s.trip_no, arg_min(o.boot_id, o.observed_at) AS boot_id
+    FROM obd o JOIN t_span s
+      ON s.vehicle_id = o.vehicle_id AND o.observed_at BETWEEN s.started_at AND s.ended_at
+    GROUP BY 1, 2
+),
+-- Bundles are attributed by their own time span overlapping the trip, since one
+-- bundle can cover part of a leg and a trip can span several bundles.
 t_held AS (
-    SELECT vehicle_id, boot_id,
-           string_agg(bundle_id, ',' ORDER BY bundle_id) AS bundle_ids,
-           count(*) AS bundle_count,
-           min(device_id) AS device_id,
-           max(decoder_ver) AS decoder_version
-    FROM bundles GROUP BY vehicle_id, boot_id
+    SELECT s.vehicle_id, s.trip_no,
+           string_agg(DISTINCT bu.bundle_id) AS bundle_ids,
+           count(DISTINCT bu.bundle_id) AS bundle_count,
+           min(bu.device_id) AS device_id,
+           max(bu.decoder_ver) AS decoder_version
+    FROM bundles bu JOIN t_span s ON s.vehicle_id = bu.vehicle_id
+    JOIN (SELECT content_root, min(observed_at) lo, max(observed_at) hi FROM
+            (SELECT content_root, observed_at FROM position
+             UNION ALL SELECT content_root, observed_at FROM obd
+             UNION ALL SELECT content_root, observed_at FROM imu) GROUP BY 1) sp
+      ON sp.content_root = bu.content_root
+    WHERE sp.hi >= s.started_at AND sp.lo <= s.ended_at
+    GROUP BY 1, 2
 )
-SELECT s.vehicle_id, s.boot_id, h.device_id,
-       s.started_at, s.ended_at, s.duration_ms,
+SELECT s.vehicle_id, b0.boot_id, h.device_id,
+       s.vehicle_id || ':' || CAST(epoch_ms(s.started_at) AS VARCHAR) AS trip_id,
+       s.started_at, s.ended_at,
+       CAST(epoch_ms(s.ended_at) - epoch_ms(s.started_at) AS BIGINT) AS duration_ms,
+       lg.driving_ms, coalesce(lg.leg_count, 0) AS leg_count,
        g.distance_m, g.max_gnss_speed_mps,
        e.max_obd_speed_kph, e.max_rpm,
        coalesce(e.obd_samples, 0) AS obd_samples,
@@ -334,14 +462,16 @@ SELECT s.vehicle_id, s.boot_id, h.device_id,
        coalesce(b.boost_samples, 0) AS boost_samples,
        coalesce(gp.gap_count, 0) AS gap_count,
        coalesce(gp.gap_duration_ms, 0) AS gap_duration_ms,
-       h.bundle_ids, h.bundle_count, h.decoder_version
+       h.bundle_ids, coalesce(h.bundle_count, 0) AS bundle_count, h.decoder_version
 FROM t_span s
-LEFT JOIN t_gnss g  ON g.vehicle_id = s.vehicle_id AND g.boot_id = s.boot_id
-LEFT JOIN t_pos p   ON p.vehicle_id = s.vehicle_id AND p.boot_id = s.boot_id
-LEFT JOIN t_eng e   ON e.vehicle_id = s.vehicle_id AND e.boot_id = s.boot_id
-LEFT JOIN t_bst b   ON b.vehicle_id = s.vehicle_id AND b.boot_id = s.boot_id
-LEFT JOIN t_gaps gp ON gp.vehicle_id = s.vehicle_id AND gp.boot_id = s.boot_id
-LEFT JOIN t_held h  ON h.vehicle_id = s.vehicle_id AND h.boot_id = s.boot_id;
+LEFT JOIN t_boot b0 ON b0.vehicle_id = s.vehicle_id AND b0.trip_no = s.trip_no
+LEFT JOIN t_legs lg ON lg.vehicle_id = s.vehicle_id AND lg.trip_no = s.trip_no
+LEFT JOIN t_gnss g  ON g.vehicle_id = s.vehicle_id AND g.trip_no = s.trip_no
+LEFT JOIN t_pos p   ON p.vehicle_id = s.vehicle_id AND p.trip_no = s.trip_no
+LEFT JOIN t_eng e   ON e.vehicle_id = s.vehicle_id AND e.trip_no = s.trip_no
+LEFT JOIN t_bst b   ON b.vehicle_id = s.vehicle_id AND b.trip_no = s.trip_no
+LEFT JOIN t_gaps gp ON gp.vehicle_id = s.vehicle_id AND gp.trip_no = s.trip_no
+LEFT JOIN t_held h  ON h.vehicle_id = s.vehicle_id AND h.trip_no = s.trip_no;
 
 -- STFT/LTFT binned by RPM (500 steps) and load (10% steps). For an ethanol
 -- blend the long-term trim is the honest signal: this is the view that

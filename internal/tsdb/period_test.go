@@ -35,12 +35,21 @@ func (p periodTrip) distanceM() float64 { return float64(p.fixes-1) * stepM }
 
 // The trips straddle every boundary the period tests care about. The two cars share
 // boot ids and start times, so only vehicle_id can tell their trips apart.
+//
+// Each trip is also spaced more than the trip-merge threshold from the next, so
+// that one fixture trip is one trip. That used to be free, because trips were keyed
+// on boot_id and two boots ten seconds apart were two trips. They are not: a trip
+// is now an outing, and a stop of ten seconds is a traffic light. The straddle
+// cases that matter -- a trip crossing midnight into 2026, and one crossing into
+// April -- are kept; their former partners starting on the first instant of the new
+// period are moved an hour later, which tests the same classification without
+// asking the view to call two overlapping runs separate trips.
 var periodTrips = []periodTrip{
 	{n20, "dec", "2025-12-31 23:59:50", 21, 50, false},  // 20 s, ends in 2026
-	{n20, "jan", "2026-01-01 00:00:00", 11, 60, false},  // starts on the first instant of 2026
+	{n20, "jan", "2026-01-01 01:00:00", 11, 60, false},  // wholly inside 2026, day one
 	{n20, "feb", "2026-02-15 12:00:00", 31, 70, false},  // Sunday, ISO week of Monday 9 Feb
 	{n20, "mar", "2026-03-31 23:59:00", 121, 90, false}, // 120 s, ends on 1 April
-	{n20, "apr", "2026-04-01 00:00:00", 61, 100, false}, // starts on the first instant of Q2
+	{n20, "apr", "2026-04-01 01:00:00", 61, 100, false}, // wholly inside Q2, day one
 	{n20, "may", "2026-05-20 08:00:00", 41, 110, false},
 	{n20, "noclock", "2026-05-20 09:00:00", 11, 200, true}, // in no period at all
 	{b58, "feb", "2026-02-15 12:00:00", 51, 130, false},
@@ -281,10 +290,10 @@ func TestTripPeriodView(t *testing.T) {
 			FROM v_trip_period WHERE vehicle_id = '`+n20+`' ORDER BY started_at`)
 		wantRows := [][]string{
 			{"2025-12-31 23:59:50", "2025-12-31", "2025-12-29", "2025-12-01", "2025-10-01", "2025-01-01"},
-			{"2026-01-01 00:00:00", "2026-01-01", "2025-12-29", "2026-01-01", "2026-01-01", "2026-01-01"},
+			{"2026-01-01 01:00:00", "2026-01-01", "2025-12-29", "2026-01-01", "2026-01-01", "2026-01-01"},
 			{"2026-02-15 12:00:00", "2026-02-15", "2026-02-09", "2026-02-01", "2026-01-01", "2026-01-01"},
 			{"2026-03-31 23:59:00", "2026-03-31", "2026-03-30", "2026-03-01", "2026-01-01", "2026-01-01"},
-			{"2026-04-01 00:00:00", "2026-04-01", "2026-03-30", "2026-04-01", "2026-04-01", "2026-01-01"},
+			{"2026-04-01 01:00:00", "2026-04-01", "2026-03-30", "2026-04-01", "2026-04-01", "2026-01-01"},
 			{"2026-05-20 08:00:00", "2026-05-20", "2026-05-18", "2026-05-01", "2026-04-01", "2026-01-01"},
 		}
 		if len(rows) != len(wantRows) {
@@ -330,4 +339,100 @@ func TestTripPeriodView(t *testing.T) {
 			t.Errorf("empty store gave %v", r)
 		}
 	})
+}
+
+
+// The errand that found this bug: home -> Trader Joe's -> Pavillions -> home,
+// which the dashboard showed as TWO trips, one of them claiming seven hours.
+//
+// The real shape, from the device's own capture transitions: three legs at
+// 8:28:29-8:35:32, 8:45:25-8:57:42 and 9:04:39-9:17:18 PM local, separated by
+// stops of 9.9 and 7.0 minutes, and spanning a power cycle because the ignition
+// cut at the first shop. One outing, three legs, two boots.
+//
+// The old view keyed on (vehicle, boot), so it merged the two legs that shared a
+// boot into one row covering the stop between them, and split the leg that had its
+// own boot into a separate trip. Both failures are in here: the fixture spans two
+// boots on purpose.
+func TestAnErrandIsOneTrip(t *testing.T) {
+	db := emptyDB(t)
+
+	// One position and one obd sample per second per leg. A leg's samples are
+	// contiguous; the stops between legs are the only gaps, which is exactly the
+	// signal the view keys on.
+	legs := []struct {
+		boot, from string
+		seconds    int
+	}{
+		{"boota", "2026-10-09 03:28:29", 423}, // 7m03s, then a 9.9 min stop
+		{"bootb", "2026-10-09 03:45:25", 737}, // 12m17s, then a 7.0 min stop
+		{"bootb", "2026-10-09 04:04:39", 759}, // 12m39s
+	}
+	for _, l := range legs {
+		at := "TIMESTAMP '" + l.from + "' + i * INTERVAL 1 SECOND"
+		for _, q := range []string{
+			fmt.Sprintf(`INSERT INTO position (vehicle_id, boot_id, mono_ms, seq, observed_at, lat, lon, speed_mps, fix_type)
+				SELECT '%s', '%s', i * 1000, i, %s, 34.0 + i * 0.001, -118.4, 11.0, 3 FROM range(%d) t(i)`,
+				n20, l.boot, at, l.seconds),
+			fmt.Sprintf(`INSERT INTO obd (vehicle_id, boot_id, mono_ms, seq, observed_at, speed_kph)
+				SELECT '%s', '%s', i * 1000, i, %s, 40 FROM range(%d) t(i)`,
+				n20, l.boot, at, l.seconds),
+		} {
+			if _, err := db.db.Exec(q); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	// A status record every 30 s for seven hours afterwards, as the device really
+	// does once parked. This must not extend the trip or create another: including
+	// status in the grain is what produced the seven-hour row.
+	if _, err := db.db.Exec(fmt.Sprintf(
+		`INSERT INTO status (vehicle_id, boot_id, mono_ms, seq, observed_at, battery_mv)
+			SELECT '%s', 'bootb', i * 30000, i, TIMESTAMP '2026-10-09 04:17:18' + i * INTERVAL 30 SECOND, 12400
+			FROM range(840) t(i)`, n20)); err != nil {
+		t.Fatal(err)
+	}
+
+	rows := query(t, db, `SELECT strftime(started_at, '%Y-%m-%d %H:%M:%S'),
+		strftime(ended_at, '%Y-%m-%d %H:%M:%S'), duration_ms, leg_count
+		FROM v_trip_summary WHERE vehicle_id = '`+n20+`' ORDER BY started_at`)
+
+	if len(rows) != 1 {
+		t.Fatalf("got %d trips, want 1: an errand with two short stops is one trip: %v", len(rows), rows)
+	}
+	if got := fmt.Sprint(rows[0][0]); got != "2026-10-09 03:28:29" {
+		t.Errorf("started_at = %s, want the first leg's first sample 2026-10-09 03:28:29", got)
+	}
+	if got := fmt.Sprint(rows[0][1]); got != "2026-10-09 04:17:17" {
+		t.Errorf("ended_at = %s, want the last leg's last sample 2026-10-09 04:17:17; "+
+			"seven hours of parked status records must not extend it", got)
+	}
+	// 03:28:29 to 04:17:17 inclusive of the stops.
+	if got := fmt.Sprint(rows[0][2]); got != "2928000" {
+		t.Errorf("duration_ms = %s, want 2928000 (the span including the stops)", got)
+	}
+}
+
+// And a stop longer than the threshold is a different trip, or the merge would
+// swallow a whole day's driving into one row.
+func TestALongStopSplitsTheTrip(t *testing.T) {
+	db := emptyDB(t)
+	for _, from := range []string{"2026-10-09 03:00:00", "2026-10-09 04:00:00"} {
+		at := "TIMESTAMP '" + from + "' + i * INTERVAL 1 SECOND"
+		for _, q := range []string{
+			fmt.Sprintf(`INSERT INTO position (vehicle_id, boot_id, mono_ms, seq, observed_at, lat, lon, speed_mps, fix_type)
+				SELECT '%s', 'b', i * 1000, i, %s, 34.0 + i * 0.001, -118.4, 11.0, 3 FROM range(120) t(i)`, n20, at),
+			fmt.Sprintf(`INSERT INTO obd (vehicle_id, boot_id, mono_ms, seq, observed_at, speed_kph)
+				SELECT '%s', 'b', i * 1000, i, %s, 40 FROM range(120) t(i)`, n20, at),
+		} {
+			if _, err := db.db.Exec(q); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	rows := query(t, db, `SELECT count(*) FROM v_trip_summary WHERE vehicle_id = '`+n20+`'`)
+	if got := fmt.Sprint(rows[0][0]); got != "2" {
+		t.Errorf("got %s trips, want 2: a 58 minute stop is not a traffic light", got)
+	}
 }
