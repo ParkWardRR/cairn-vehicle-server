@@ -25,6 +25,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -47,6 +48,11 @@ const (
 	controlUUID = "A8E30030-4F5B-11EF-A017-325096B39F47"
 	dataUUID    = "A8E30031-4F5B-11EF-A017-325096B39F47"
 	versionUUID = "A8E300F0-4F5B-11EF-A017-325096B39F47"
+	// UTC_SYNC (contracts/ble/v1 §UTC_SYNC): eight bytes of Unix milliseconds,
+	// phone to device. The contract has specified it since Phase 2 and the
+	// dongle now exposes it, but nothing was writing it -- so a drive that never
+	// got a GNSS fix stayed undated even though this Mac knew the time all along.
+	utcSyncUUID = "A8E30003-4F5B-11EF-A017-325096B39F47"
 	capOffload  = 0x04
 )
 
@@ -252,17 +258,20 @@ func connect(timeout time.Duration, wantName string) (*offloadclient.Client, fun
 	ctlU, _ := bluetooth.ParseUUID(controlUUID)
 	datU, _ := bluetooth.ParseUUID(dataUUID)
 	verU, _ := bluetooth.ParseUUID(versionUUID)
+	utcU, _ := bluetooth.ParseUUID(utcSyncUUID)
 
 	// Touching an encrypted characteristic is what makes macOS pair; this is where
 	// the passkey prompt appears the first time.
 	fmt.Println("reading the dongle's capabilities (macOS may ask for the pairing passkey)…")
-	chars, err := services[0].DiscoverCharacteristics([]bluetooth.UUID{ctlU, datU, verU})
+	chars, err := services[0].DiscoverCharacteristics([]bluetooth.UUID{ctlU, datU, verU, utcU})
 	if err != nil {
 		cleanup()
 		return nil, nil, fmt.Errorf("characteristics: %w", err)
 	}
 	var tr bleTransport
 	var ver bluetooth.DeviceCharacteristic
+	var utc bluetooth.DeviceCharacteristic
+	haveUTC := false
 	have := 0
 	for _, c := range chars {
 		switch c.UUID() {
@@ -275,6 +284,9 @@ func connect(timeout time.Duration, wantName string) (*offloadclient.Client, fun
 		case verU:
 			ver = c
 			have |= 4
+		case utcU:
+			utc = c
+			haveUTC = true
 		}
 	}
 	if have&4 == 0 {
@@ -298,6 +310,33 @@ func connect(timeout time.Duration, wantName string) (*offloadclient.Client, fun
 		tr.mtu = 23
 	}
 	fmt.Printf("paired; ATT MTU %d\n", tr.mtu)
+
+	/*
+	 * Tell the dongle what time it is.
+	 *
+	 * Done here, right after pairing, because it is the earliest moment the link
+	 * can carry it and the dongle's own clock may be minutes from a GNSS fix or
+	 * never get one. The device records it as one observation among several and
+	 * decides for itself whether to adopt it; this side only has to offer.
+	 *
+	 * A dongle without the characteristic is not an error -- older firmware
+	 * simply does not have it, and the contract says to write only when it is
+	 * exposed.
+	 */
+	if haveUTC {
+		now := time.Now().UnixMilli()
+		var b [8]byte
+		binary.LittleEndian.PutUint64(b[:], uint64(now))
+		if _, err := utc.WriteWithoutResponse(b[:]); err != nil {
+			// Not fatal: the offload is the job, and the dongle keeps working
+			// without knowing the time -- it just records DEGRADED_TIME.
+			fmt.Printf("could not send the time: %v\n", err)
+		} else {
+			fmt.Printf("sent UTC %s\n", time.UnixMilli(now).UTC().Format(time.RFC3339))
+		}
+	} else {
+		fmt.Println("this dongle has no UTC_SYNC characteristic; not sending the time")
+	}
 
 	cl := offloadclient.New(&tr)
 	if err := tr.control.EnableNotifications(cl.OnControl); err != nil {
