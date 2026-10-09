@@ -31,6 +31,7 @@ import (
 
 	"github.com/ParkWardRR/cairn-vehicle-server/format"
 	"github.com/ParkWardRR/cairn-vehicle-server/internal/decode"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/modules"
 )
 
 // Options tunes a build.
@@ -49,6 +50,11 @@ type Options struct {
 
 	// Tunes are the owner's tune records, loaded into the tune table. Optional.
 	Tunes []TuneRow
+
+	// Modules is the module set whose derivations are applied during the load.
+	// Optional: with none, every grandfathered column keeps the value the decode path
+	// computed, which is what every deployment had before modules existed.
+	Modules []*modules.Module
 }
 
 // TuneRow is one tune record as the store holds it. The vehicle registry is where tunes
@@ -105,6 +111,15 @@ type Report struct {
 	Bundles    []BundleReport `json:"bundles"`
 	Notes      []string       `json:"notes,omitempty"`
 
+	// Modules is the module-set identity string, or empty when no module set was
+	// configured. A module set changes what this store contains, so by the project's
+	// fifth invariant it is part of the store's identity: a rebuild under a different
+	// set must be visibly a different rebuild and not a silent mismatch.
+	Modules string `json:"modules,omitempty"`
+
+	// Derived records which module defined which column.
+	Derived []DerivedColumn `json:"derived,omitempty"`
+
 	// Problems are the reproducibility failures. A build with any is not served
 	// by default: numbers that did not reproduce are worse than no numbers.
 	Problems []string `json:"problems,omitempty"`
@@ -157,6 +172,14 @@ func Build(ctx context.Context, snap *Snapshot, notes []string, opts Options) (*
 		return fail(err)
 	}
 	if err := reconcile(ctx, sdb, loaded, &report); err != nil {
+		return fail(err)
+	}
+
+	// Derive, then order, then build the views. Derivations have to precede the views
+	// because a view may read a derived column, and they follow the load because an
+	// UPDATE over loaded rows is what makes a grandfathered takeover observable and
+	// reversible.
+	if err := applyDerivations(ctx, sdb, opts.Modules, &report); err != nil {
 		return fail(err)
 	}
 

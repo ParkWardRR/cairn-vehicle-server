@@ -49,6 +49,7 @@ import (
 	"github.com/ParkWardRR/cairn-vehicle-server/format"
 	"github.com/ParkWardRR/cairn-vehicle-server/internal/buildinfo"
 	"github.com/ParkWardRR/cairn-vehicle-server/internal/keystore"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/modules"
 	"github.com/ParkWardRR/cairn-vehicle-server/internal/mtls"
 	"github.com/ParkWardRR/cairn-vehicle-server/internal/tsdb"
 	"github.com/ParkWardRR/cairn-vehicle-server/internal/vehicles"
@@ -63,6 +64,11 @@ type config struct {
 
 	// keys decrypts bundles. Built from -keystore and -keystore-master.
 	keys format.KeyProvider
+
+	// modulesDir holds the module set whose derivations are applied during the load.
+	// Empty means none, which is what every deployment had before modules existed: the
+	// grandfathered columns keep the values the decode path computed.
+	modulesDir string
 }
 
 func main() {
@@ -83,6 +89,8 @@ func main() {
 	flag.StringVar(&cfg.sdRoot, "sd", "", "SD card cairn/ directory (sealed v2 bundles); optional")
 	flag.StringVar(&cfg.scratch, "scratch", "", "parent directory for the throwaway CAS (default: system temp)")
 	flag.StringVar(&cfg.memory, "memory", "2GB", "DuckDB memory ceiling")
+	flag.StringVar(&cfg.modulesDir, "modules", "",
+		"module set directory; default CAIRN_MODULES, then ./modules, then ./.modules/modules")
 	flag.StringVar(&cfg.vehiclesFile, "vehicles", "",
 		"cairn-server's vehicles.json, read for tune records (default: <data>/vehicles.json when -data is set and it exists)")
 	keystorePath := flag.String("keystore", "", "escrowed storage-root file (required: bundles are encrypted)")
@@ -248,7 +256,25 @@ func build(ctx context.Context, cfg config) (*tsdb.DB, error) {
 		notes = append(notes, fmt.Sprintf("tune records not loaded: %v", err))
 	}
 
-	return tsdb.Build(ctx, snap, notes, tsdb.Options{MemoryLimit: cfg.memory, Keys: cfg.keys, Tunes: tunes})
+	// A module set that will not load is fatal, unlike the tune records above. Tunes are
+	// an annotation and the trips survive without them; a module owns the DEFINITION of a
+	// column, so starting without one it was configured with would serve a store quietly
+	// different from the one asked for.
+	dir := cfg.modulesDir
+	if dir == "" {
+		dir = modules.Dir()
+	}
+	mods, err := modules.LoadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("module set: %w", err)
+	}
+	if len(mods) > 0 {
+		notes = append(notes, "modules: "+modules.IdentityString(mods))
+	}
+
+	return tsdb.Build(ctx, snap, notes, tsdb.Options{
+		MemoryLimit: cfg.memory, Keys: cfg.keys, Tunes: tunes, Modules: mods,
+	})
 }
 
 func loadTunes(path string) ([]tsdb.TuneRow, error) {
