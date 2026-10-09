@@ -1,5 +1,5 @@
 <!-- cairn-nav:start -->
-<p align="center"><b>Cairn is a family of five repositories.</b> Each builds, tests and releases on its own; they agree through the shared <a href="https://github.com/ParkWardRR/cairn-driving-log-selfhosted/tree/main/contracts">contracts</a>.</p>
+<p align="center"><b>Cairn is a family of six repositories.</b> Each builds, tests and releases on its own; they agree through the shared <a href="https://github.com/ParkWardRR/cairn-driving-log-selfhosted/tree/main/contracts">contracts</a>, and they share one <a href="https://github.com/ParkWardRR/cairn-driving-log-selfhosted/blob/main/ROADMAP.md">roadmap</a>.</p>
 
 | Part | Repository | What it does | Stack | Docs | Issues | CI |
 |---|---|---|---|---|---|---|
@@ -8,6 +8,7 @@
 | Phone | [cairn-ios-companion-app](https://github.com/ParkWardRR/cairn-ios-companion-app) | BLE relay, GPS assist, server client | Swift · SwiftUI | [docs](https://github.com/ParkWardRR/cairn-ios-companion-app/tree/main/docs) | [issues](https://github.com/ParkWardRR/cairn-ios-companion-app/issues) | [CI](https://github.com/ParkWardRR/cairn-ios-companion-app/actions) |
 | Server | **[cairn-vehicle-server](https://github.com/ParkWardRR/cairn-vehicle-server)** ◀ you are here | Verifies, decrypts, stores; serves app and dashboard | Go | [docs](https://github.com/ParkWardRR/cairn-vehicle-server/tree/main/docs) | [issues](https://github.com/ParkWardRR/cairn-vehicle-server/issues) | [CI](https://github.com/ParkWardRR/cairn-vehicle-server/actions) |
 | Dashboard | [cairn-vehicle-web-dashboard](https://github.com/ParkWardRR/cairn-vehicle-web-dashboard) | Browser UI: trips, places, engine, health | Nuxt · TypeScript | [docs](https://github.com/ParkWardRR/cairn-vehicle-web-dashboard/tree/main/docs) | [issues](https://github.com/ParkWardRR/cairn-vehicle-web-dashboard/issues) | [CI](https://github.com/ParkWardRR/cairn-vehicle-web-dashboard/actions) |
+| Modules | [cairn-modules](https://github.com/ParkWardRR/cairn-modules) | Interpretation, separated from the logging core: one package per module | YAML · Rust | [readme](https://github.com/ParkWardRR/cairn-modules#readme) | [issues](https://github.com/ParkWardRR/cairn-modules/issues) | [CI](https://github.com/ParkWardRR/cairn-modules/actions) |
 
 <sub>Shared: [Roadmap](https://github.com/ParkWardRR/cairn-driving-log-selfhosted/blob/main/ROADMAP.md) · [Install](https://github.com/ParkWardRR/cairn-driving-log-selfhosted/blob/main/INSTALL.md) · [Architecture](https://github.com/ParkWardRR/cairn-driving-log-selfhosted/blob/main/docs/architecture.md) · [Threat model](https://github.com/ParkWardRR/cairn-driving-log-selfhosted/blob/main/docs/threat-model.md) · [Trust model](https://github.com/ParkWardRR/cairn-driving-log-selfhosted/blob/main/docs/trust-model-v3.md) · [Contracts](https://github.com/ParkWardRR/cairn-driving-log-selfhosted/tree/main/contracts) · [Archive of the original monorepo](https://github.com/ParkWardRR/cairn-original-monorepo-archive)</sub>
 <!-- cairn-nav:end -->
@@ -46,8 +47,19 @@ This repository is the server. The other parts are listed under [Related reposit
 
 ## Status at a glance
 
-Honest status, as of 2026-10-06. "Deployed" is taken from the front door's
-[ROADMAP](https://github.com/ParkWardRR/cairn-driving-log-selfhosted/blob/main/ROADMAP.md) (last reviewed 2026-10-05); this repository cannot verify a live host.
+Honest status, as of **2026-10-08**. "Deployed" is taken from the project's single
+[roadmap](https://github.com/ParkWardRR/cairn-driving-log-selfhosted/blob/main/ROADMAP.md#where-cairn-is-today);
+this repository cannot verify a live host by itself.
+
+> **Where this is going** is not in this README. The project keeps one roadmap, for all six
+> repositories. This server's next work is
+> [Phase 28](https://github.com/ParkWardRR/cairn-driving-log-selfhosted/blob/main/ROADMAP.md#phase-28--the-networked-dongle-finished--in-progress)
+> (a device uplink endpoint and a sealed configuration service, then retiring the legacy `:8443`
+> listener), the
+> [module system's M3 remainder](https://github.com/ParkWardRR/cairn-driving-log-selfhosted/blob/main/ROADMAP.md#m1m7--the-module-system--in-progress)
+> (module views, `v_metric_samples`, named queries) and
+> [Phase 30](https://github.com/ParkWardRR/cairn-driving-log-selfhosted/blob/main/ROADMAP.md#phase-30--insight-history-health-and-engine-aware-views--in-progress)
+> (a tune record, baselines and a health summary).
 
 | Area | State | Notes |
 |---|---|---|
@@ -58,18 +70,27 @@ Honest status, as of 2026-10-06. "Deployed" is taken from the front door's
 | `cairn-tsdb` analytical store (in-memory DuckDB) | **Shipped, deployed** | Rebuilt from the raw bundles on every start; refuses to serve if the rebuild does not reproduce |
 | PostgreSQL/PostGIS decode (`cairn-worker`) | **Built and tested in CI; not installed by `deploy-v3.sh`** | No systemd unit is shipped. The dashboard reads `cairn-tsdb`, not PostgreSQL |
 | `store/v1` views, tune records, engine profiles, health summary, bundle paths | **Shipped, tested** | Store contract `store/v1.3`; see [below](#analytical-store-storev1) |
-| Real hardware, end to end | **First verified 2026-10-06** | The dongle, `cmd/cairn-phone` on macOS, this server's relay, `cairn-tsdb` and the dashboard talked to each other for the first time: nine bundles over BLE in 62 s, nine committed via `/v1/relay/bundles/*`, nine receipts signed, the dongle verified each against the pinned key and pruned. The firmware ran a dev-pairing build (Just Works, no MITM) — see the firmware README's "Pairing and access" caveat. A real-car trip is still open (server issue 20) |
-| Direct dongle upload over Wi-Fi or LTE (`uplink/v1`) | **Planned** | Owner decision 2026-10-05. The contract is draft and nothing here implements it (server issue 21) |
+| Real hardware, end to end | **Verified 2026-10-06, and real trips since** | The dongle, `cmd/cairn-phone` on macOS, this server's relay, `cairn-tsdb` and the dashboard talked to each other for the first time: nine bundles over BLE in 62 s, nine committed via `/v1/relay/bundles/*`, nine receipts signed, and the dongle verified each against the pinned key and pruned. The ledger records all nine as `offered → committed → receipt_issued → decode_queued`, `"path":"ble-relay"`. One `counter_gap` is in there (counter 8 skipped seven values past the high-water mark): logged, committed anyway, worth understanding. The firmware ran a dev-pairing build (Just Works, no MITM) — see the firmware README's "Pairing and access" caveat |
+| Trips the dongle uploaded **itself** | **Accepted, on the legacy listener** | Since 2026-10-07 the dongle delivers bundles over Wi-Fi mTLS and over LTE through a Tailscale Funnel ingress, and prunes on this server's receipts. It does so through the **legacy** `:8443` device listener, not through `uplink/v1` — so the listener cannot be retired until the replacement endpoint exists (server issue 21) |
+| Device uplink endpoint (`uplink/v1`) | **Designed, not implemented** | The contract is draft with 15 vectors. Writing it is what lets `:8443` and the device certificates go away (server issue 21) |
+| Modules (`module/v1`): module-owned derived columns | **Shipped, tested** | `internal/modules` loads and validates a module set at runtime (`cairn-tsdb -modules`), resolves its requirements against the live catalogue and orders derivations topologically, refusing a cycle; `applyDerivations` runs them after the rows load and before the views. `boost` owns `boost.boost_psi`. A module set that will not load is **fatal**, because a module owns a column's definition. Module **views**, metrics and named queries are not implemented yet |
 | LTE digests (provisional trips, usage accounting) | **Planned** | Server issue 25 |
 | Sealed device configuration (Wi-Fi and LTE settings sent to the dongle) | **Planned** | Server issue 24 |
 | v2 to v3 data migration | **Planned** | Wanted by the owner (server issue 18). No migration code exists. [MIGRATION.md](MIGRATION.md) is about this repository's *history*, not about data |
 | Passkey sign-in | **Not in this repository, by design** | Passkeys and Tailnet identity are both supported by the [web dashboard](https://github.com/ParkWardRR/cairn-vehicle-web-dashboard/blob/main/docs/auth.md); see [Who can do what](#who-can-do-what-passkeys-and-tailnet-identity) |
 
 **Hardware constraint worth knowing.** There is exactly one real dongle, an ESP32 revision v1.0 part. ESP32 Secure Boot V2
-needs revision v3.0 or later, so it is **not available** on that unit, and no eFuse is burned without a spare unit. What
-protects a stolen *powered-off* dongle is flash and NVS encryption (planned and gated; see the firmware repository). What
-protects the *server* from a stolen dongle is revocation here, plus the fact that the dongle holds no network credential
-today. None of that changes how this server behaves.
+needs revision v3.0 or later, so it is **not available** on that unit, and no eFuse is burned without a spare unit — which
+means flash and NVS encryption are **not** coming to this dongle, and the network credentials it now holds are in plaintext
+flash. What that costs is bounded: a flash dump yields the device's client key, which permits uploading **as** that device
+and reading what it uploads. It does **not** permit deleting anything, because a prune requires a receipt this server
+signed and the dongle verified. What protects the server from a stolen dongle is therefore revocation here, which takes
+effect on the next request. None of that changes how this server behaves.
+
+**One PKI fact that blocks work here.** The `Cairn Private CA` private key does not exist on the host or anywhere else, so
+no new device client certificate can be issued, and `server.pem`'s SAN covers the LAN name only. Regenerating the PKI is
+low risk — no client certificate was ever issued and the firmware pins no CA — and whatever replaces it needs both the LAN
+name and the Funnel name. Until then the cellular path depends on Funnel and TLS terminates on the ESP32.
 
 ## What is in the box
 
@@ -859,13 +880,18 @@ warnings and backlog (never raw samples) to a LAN broker.
   placeholders (`user@host`, `<tailnet-name>`). `deploy/certs/`, `*.pem` and `*.key` are gitignored.
 - **Never log** payloads, GPS coordinates, bearer tokens, signatures, SSIDs or a full VIN. The audit log is built so it cannot.
 - Pull requests must come from a branch of this repository to run CI, by design.
+- **For anything that reads pinned vectors, run `go test -count=1`** and fetch the contracts first. A cached pass from
+  before `scripts/fetch-contracts.sh` ran makes the check meaningless, and has already produced one false green.
+- **Do not add a roadmap here.** The project keeps one, in the front door repository. This README says what the server is
+  and what it has running; the plan lives there.
 
 ## Related repositories
 
-- [cairn-driving-log-selfhosted](https://github.com/ParkWardRR/cairn-driving-log-selfhosted): the front door: system docs, roadmap and the shared contracts
-- [cairn-esp32-device-firmware](https://github.com/ParkWardRR/cairn-esp32-device-firmware): the dongle firmware
-- [cairn-ios-companion-app](https://github.com/ParkWardRR/cairn-ios-companion-app): the iPhone app
-- [cairn-vehicle-web-dashboard](https://github.com/ParkWardRR/cairn-vehicle-web-dashboard): the web dashboard
+- [cairn-driving-log-selfhosted](https://github.com/ParkWardRR/cairn-driving-log-selfhosted): the front door — system docs, the one [roadmap](https://github.com/ParkWardRR/cairn-driving-log-selfhosted/blob/main/ROADMAP.md) and the shared contracts this server pins
+- [cairn-esp32-device-firmware](https://github.com/ParkWardRR/cairn-esp32-device-firmware): the dongle firmware, whose bundles land here
+- [cairn-ios-companion-app](https://github.com/ParkWardRR/cairn-ios-companion-app): the iPhone app — the client `sync/v1` and the relay exist for
+- [cairn-vehicle-web-dashboard](https://github.com/ParkWardRR/cairn-vehicle-web-dashboard): the web dashboard, which reads `cairn-tsdb` through its own server layer
+- [cairn-modules](https://github.com/ParkWardRR/cairn-modules): the modules whose derivations, views and queries this server runs
 - [cairn-original-monorepo-archive](https://github.com/ParkWardRR/cairn-original-monorepo-archive): the archived original (read-only)
 
 History before the split is preserved here; see [MIGRATION.md](MIGRATION.md).
