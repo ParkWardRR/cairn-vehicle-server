@@ -192,7 +192,14 @@ func Build(ctx context.Context, snap *Snapshot, notes []string, opts Options) (*
 			return fail(fmt.Errorf("sort %s: %w", t, err))
 		}
 	}
-	if _, err := sdb.ExecContext(ctx, viewsSQL); err != nil {
+	// The views are rendered for this module set: a module's metrics become arms of
+	// v_metric_samples and keys in v_tune_effect, so the generic machinery picks them up
+	// without any of its SQL knowing that modules exist.
+	views, err := buildViewsSQL(opts.Modules)
+	if err != nil {
+		return fail(err)
+	}
+	if _, err := sdb.ExecContext(ctx, views); err != nil {
 		return fail(fmt.Errorf("views: %w", err))
 	}
 

@@ -1,5 +1,7 @@
 package tsdb
 
+import "github.com/ParkWardRR/cairn-vehicle-server/internal/modules"
+
 // Every sample table is keyed on (boot_id, mono_ms), never on wall-clock UTC.
 // Ordering truth in a Cairn bundle is (boot_id, seq); UTC is an estimate that
 // carries its own uncertainty. mono_ms is the boot-relative clock that the
@@ -165,7 +167,27 @@ var bundleTables = []string{"bundles", "position", "imu", "obd", "boost", "statu
 // streaming merge rather than a hash build.
 var sampleTables = []string{"position", "imu", "obd", "boost", "status", "transition", "time_obs"}
 
-// viewsSQL are the canned analysis surfaces.
+// viewsSQL is the analysis surfaces for a store with no module set: buildViewsSQL(nil).
+// It is what demo.go and the tests use, and it must stay byte-identical to the text that
+// existed before v_metric_samples became generated -- see TestNoModuleSetRendersTheCoreText.
+var viewsSQL = mustViews(nil)
+
+func mustViews(mods []*modules.Module) string {
+	s, err := buildViewsSQL(mods)
+	if err != nil {
+		panic("tsdb: core views: " + err.Error())
+	}
+	return s
+}
+
+// viewsTemplate are the canned analysis surfaces. Two comment markers are substituted by
+// buildViewsSQL -- the body of v_metric_samples and the metric-key list of v_tune_effect --
+// so a module's metrics reach the generic machinery without this text knowing that modules
+// exist.
+//
+// Markers rather than fmt verbs: this is 20 KB of SQL with "%" in it (a percentage in a
+// comment, a modulo), and Sprintf reads those as verbs. A marker that looks like a SQL
+// comment cannot collide with anything the SQL itself contains.
 //
 // Every one of them is per vehicle: vehicle_id is the first output column, every
 // join and ASOF join carries vehicle_id equality next to boot_id, and every
@@ -177,7 +199,7 @@ var sampleTables = []string{"position", "imu", "obd", "boost", "status", "transi
 // GNSS row at or before it. The *_age_ms columns are the honest part: an ASOF
 // join always finds *something*, so how stale it is has to travel with the row,
 // and a consumer that wants only fresh readings filters on the age.
-const viewsSQL = `
+const viewsTemplate = `
 CREATE VIEW v_telemetry AS
 SELECT
     o.vehicle_id, o.boot_id, o.mono_ms, o.observed_at,
@@ -625,25 +647,7 @@ GROUP BY vehicle_id, boot_id;
 --                      short ones and a drive that barely started counts for nothing.
 -- metric is the engine profile's signal key.
 CREATE VIEW v_metric_samples AS
-SELECT p.vehicle_id, p.boot_id, 'boost_psi' AS metric, p.peak_boost_psi AS value, s.started_at
-FROM v_pulls p JOIN v_boot_start s ON s.vehicle_id = p.vehicle_id AND s.boot_id = p.boot_id
-WHERE p.peak_boost_psi IS NOT NULL
-UNION ALL
-SELECT p.vehicle_id, p.boot_id, 'lambda', p.avg_lambda, s.started_at
-FROM v_pulls p JOIN v_boot_start s ON s.vehicle_id = p.vehicle_id AND s.boot_id = p.boot_id
-WHERE p.avg_lambda IS NOT NULL
-UNION ALL
-SELECT b.vehicle_id, b.boot_id, 'ltft_pct', median(b.ltft_pct), s.started_at
-FROM boost b JOIN v_boot_start s ON s.vehicle_id = b.vehicle_id AND s.boot_id = b.boot_id
-WHERE b.ltft_pct IS NOT NULL
-GROUP BY b.vehicle_id, b.boot_id, s.started_at
-HAVING count(*) >= 20
-UNION ALL
-SELECT b.vehicle_id, b.boot_id, 'stft_pct', median(b.stft_pct), s.started_at
-FROM boost b JOIN v_boot_start s ON s.vehicle_id = b.vehicle_id AND s.boot_id = b.boot_id
-WHERE b.stft_pct IS NOT NULL
-GROUP BY b.vehicle_id, b.boot_id, s.started_at
-HAVING count(*) >= 20;
+/*CAIRN:METRIC_ARMS*/;
 
 -- Before and after, per tune and metric. "Before" is the stretch under the previous tune
 -- (from that tune's day up to this one, or from the start of the data for the first tune)
@@ -665,7 +669,7 @@ SELECT t.vehicle_id, t.tune_id, m.metric,
        count(*) FILTER (WHERE s.started_at >= t.window_from AND s.started_at < t.tuned_at)        AS before_n,
        count(*) FILTER (WHERE s.started_at >= t.tuned_at AND s.started_at < t.window_to)          AS after_n
 FROM tw t
-CROSS JOIN (VALUES ('boost_psi'), ('lambda'), ('ltft_pct'), ('stft_pct')) AS m(metric)
+CROSS JOIN (VALUES /*CAIRN:METRIC_KEYS*/) AS m(metric)
 LEFT JOIN v_metric_samples s ON s.vehicle_id = t.vehicle_id AND s.metric = m.metric
 GROUP BY t.vehicle_id, t.tune_id, m.metric;
 
@@ -738,3 +742,32 @@ FROM v_trip_period
 WHERE started_at >= CAST(from_day AS TIMESTAMP) AND started_at < CAST(to_day AS TIMESTAMP)
 GROUP BY vehicle_id;
 `
+
+// coreMetricArms are the metric readings the logging core has always contributed, as the
+// arms of v_metric_samples. They are kept here verbatim rather than re-derived, because
+// they are grandfathered the way module/v1 §4's two columns are: they stand whether or not
+// a module set is configured, so a store built with no modules is byte-identical to one
+// built before modules existed.
+//
+// Each will move to the module that owns it -- boost_psi and lambda to `boost`, the two
+// trims to `fuel-mixture` -- which is a takeover, and takeover is the question module/v1
+// has not answered yet. See moduleMetricArms.
+const coreMetricArms = `SELECT p.vehicle_id, p.boot_id, 'boost_psi' AS metric, p.peak_boost_psi AS value, s.started_at
+FROM v_pulls p JOIN v_boot_start s ON s.vehicle_id = p.vehicle_id AND s.boot_id = p.boot_id
+WHERE p.peak_boost_psi IS NOT NULL
+UNION ALL
+SELECT p.vehicle_id, p.boot_id, 'lambda', p.avg_lambda, s.started_at
+FROM v_pulls p JOIN v_boot_start s ON s.vehicle_id = p.vehicle_id AND s.boot_id = p.boot_id
+WHERE p.avg_lambda IS NOT NULL
+UNION ALL
+SELECT b.vehicle_id, b.boot_id, 'ltft_pct', median(b.ltft_pct), s.started_at
+FROM boost b JOIN v_boot_start s ON s.vehicle_id = b.vehicle_id AND s.boot_id = b.boot_id
+WHERE b.ltft_pct IS NOT NULL
+GROUP BY b.vehicle_id, b.boot_id, s.started_at
+HAVING count(*) >= 20
+UNION ALL
+SELECT b.vehicle_id, b.boot_id, 'stft_pct', median(b.stft_pct), s.started_at
+FROM boost b JOIN v_boot_start s ON s.vehicle_id = b.vehicle_id AND s.boot_id = b.boot_id
+WHERE b.stft_pct IS NOT NULL
+GROUP BY b.vehicle_id, b.boot_id, s.started_at
+HAVING count(*) >= 20`
