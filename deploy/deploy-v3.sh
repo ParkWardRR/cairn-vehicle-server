@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
 # Deploy the v3 server stack to the Cairn host.
 #
-#   deploy/deploy-v3.sh <user@host> [--reset-v2-data] [--build-only] [--snapshot]
+#   deploy/deploy-v3.sh <user@host> [--channel beta|stable] [--reset-v2-data] [--build-only] [--snapshot]
+#
+# --channel names the release channel this deploy is: beta or stable. It changes two
+# things. The binaries are stamped with it, so /healthz says which channel is serving;
+# and the source is a clean export of HEAD rather than the working tree, with a dirty
+# tree refused outright. Without --channel the deploy is a dev deploy of the working
+# tree, which is what it has always been and is right for iterating.
+#
+# A release that cannot be reproduced is not one. See the front door's
+# docs/release-process.md.
 #
 # --build-only syncs and builds on the host, then stops: nothing is installed and
 # nothing is restarted, so it is safe to run against a host that is serving.
@@ -18,6 +27,7 @@
 # names in this file: pass them on the command line.
 #
 # What it does, in order, stopping at the first failure:
+#   0. with --channel: refuse a dirty tree, and export HEAD to a temporary directory
 #   1. rsync this repository (and deploy/) to ~/cairn-v3 on the host
 #   2. build with nice and -p 4 (the host is shared with the runner and the
 #      database; an uncapped build has wedged it before)
@@ -32,27 +42,53 @@
 #   7. restart and wait for health
 set -euo pipefail
 
-HOST="${1:?usage: deploy-v3.sh <user@host> [--reset-v2-data] [--build-only] [--snapshot]}"
+HOST="${1:?usage: deploy-v3.sh <user@host> [--channel beta|stable] [--reset-v2-data] [--build-only] [--snapshot]}"
 shift
-RESET=0; BUILD_ONLY=0; SNAPSHOT=0
-for a in "$@"; do
-  case "$a" in
+RESET=0; BUILD_ONLY=0; SNAPSHOT=0; CHANNEL=dev
+while [ $# -gt 0 ]; do
+  case "$1" in
     --reset-v2-data) RESET=1 ;;
     --build-only) BUILD_ONLY=1 ;;
     --snapshot) SNAPSHOT=1 ;;
-    *) echo "unknown option: $a" >&2; exit 2 ;;
+    --channel)
+      CHANNEL="${2:?--channel needs a value: beta or stable}"
+      shift
+      case "$CHANNEL" in
+        beta|stable) ;;
+        dev) echo "dev is the default; --channel dev is the same as passing nothing" >&2 ;;
+        *) echo "channel must be beta or stable, not '$CHANNEL'" >&2; exit 2 ;;
+      esac
+      ;;
+    *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
+  shift
 done
 [ "$SNAPSHOT" = 1 ] && [ "$BUILD_ONLY" = 1 ] && { echo "--snapshot stops cairn-server for the copy; --build-only promises to stop nothing" >&2; exit 2; }
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DATA=/var/lib/cairn
 BINS="cairn-server cairn-admin cairn-verify cairn-ledger cairn-signfw"
 
+# What gets rsynced. A dev deploy sends the working tree, which is the point of a dev
+# deploy. A channel deploy sends a clean export of HEAD, so the commit on /healthz
+# describes what is running.
+SRC="$ROOT"
+if [ "$CHANNEL" != dev ]; then
+  if [ -n "$(git -C "$ROOT" status --porcelain)" ]; then
+    echo "Refusing a $CHANNEL deploy from a dirty tree: /healthz would name a commit that is not what ran." >&2
+    git -C "$ROOT" status --short >&2
+    exit 1
+  fi
+  SRC="$(mktemp -d)"
+  trap 'rm -rf "$SRC"' EXIT
+  git -C "$ROOT" archive HEAD | tar -x -C "$SRC"
+  echo "==> $CHANNEL deploy from a clean export of $(git -C "$ROOT" rev-parse --short HEAD)"
+fi
+
 echo "==> syncing source"
 ssh "$HOST" "mkdir -p ~/cairn-v3/server ~/cairn-v3/deploy"
 rsync -az --delete --exclude node_modules --exclude .git --exclude 'bin/' \
   --exclude deploy --exclude .contracts \
-  "$ROOT/" "$HOST:cairn-v3/server/"
+  "$SRC/" "$HOST:cairn-v3/server/"
 rsync -az --delete "$ROOT/deploy/" "$HOST:cairn-v3/deploy/"
 
 echo "==> building on the host (nice, -p 4)"
@@ -60,7 +96,7 @@ echo "==> building on the host (nice, -p 4)"
 # (/healthz) itself; it is taken from this checkout and passed in.
 VERSION="$(git -C "$ROOT" describe --tags --always --dirty 2>/dev/null || echo dev)"
 COMMIT="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
-ssh "$HOST" "cd ~/cairn-v3/server && nice -n 10 make build BINDIR=bin GOFLAGS=-p=4 VERSION='$VERSION' COMMIT='$COMMIT' && nice -n 10 make build-tsdb BINDIR=bin GOFLAGS=-p=4 VERSION='$VERSION' COMMIT='$COMMIT'"
+ssh "$HOST" "cd ~/cairn-v3/server && nice -n 10 make build BINDIR=bin GOFLAGS=-p=4 VERSION='$VERSION' COMMIT='$COMMIT' CHANNEL='$CHANNEL' && nice -n 10 make build-tsdb BINDIR=bin GOFLAGS=-p=4 VERSION='$VERSION' COMMIT='$COMMIT' CHANNEL='$CHANNEL'"
 
 if [ "$BUILD_ONLY" = 1 ]; then
   echo "==> built; --build-only, so nothing was installed or restarted"

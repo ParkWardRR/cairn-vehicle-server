@@ -41,7 +41,11 @@ BINDIR  ?= bin
 # the binary still reports whatever the Go toolchain stamped into it.
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null)
 COMMIT  ?= $(shell git rev-parse HEAD 2>/dev/null)
-BUILDINFO := -X github.com/ParkWardRR/cairn-vehicle-server/internal/buildinfo.Version=$(VERSION) -X github.com/ParkWardRR/cairn-vehicle-server/internal/buildinfo.Commit=$(COMMIT)
+# Which release channel this build belongs to: dev, beta or stable. dev is the honest default
+# for a build made by hand; deploy/deploy-v3.sh --channel passes the other two. An unrecognised
+# value reads as dev and never as stable. See the front door's docs/release-process.md.
+CHANNEL ?= dev
+BUILDINFO := -X github.com/ParkWardRR/cairn-vehicle-server/internal/buildinfo.Version=$(VERSION) -X github.com/ParkWardRR/cairn-vehicle-server/internal/buildinfo.Commit=$(COMMIT) -X github.com/ParkWardRR/cairn-vehicle-server/internal/buildinfo.Channel=$(CHANNEL)
 LDFLAGS ?= -s -w $(BUILDINFO)
 
 UNAME_S := $(shell uname -s)
