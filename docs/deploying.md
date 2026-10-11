@@ -1,11 +1,23 @@
 # Deploying the ingest server
 
-> **Amended 2026-10-05.** The dongle no longer has Wi-Fi and does not use the
-> `:8443` mTLS listener described here; the enrolled phone relays its bundles through
-> the app API ([app-sync-protocol.md](https://github.com/ParkWardRR/cairn-driving-log-selfhosted/blob/main/contracts/sync/v1/spec.md) §13). This page describes
-> the legacy device path, which stays deployed until the relay is proven on hardware
-> and is then retired (Cairn #7). The current deployment is
-> `deploy/deploy-v3.sh`; see also [tailscale-deployment.md](tailscale-deployment.md).
+> **Amended 2026-10-10, and the 2026-10-05 amendment this replaced was wrong by then.**
+> That note said the dongle has no Wi-Fi and does not use the `:8443` mTLS listener, and
+> that the listener would be retired under Cairn #7. All three claims have since been
+> reversed:
+>
+> - The dongle got **Wi-Fi and LTE back** on 2026-10-05
+>   ([front door #19](https://github.com/ParkWardRR/cairn-driving-log-selfhosted/issues/19)),
+>   and both ran on the car's unit on 2026-10-07.
+> - **This listener is the production upload path.** The dongle delivers whole sealed
+>   bundles to it over LTE through a Tailscale Funnel ingress and prunes on its receipts.
+>   The phone relay (app API) is a second path, not a replacement.
+> - **Cairn #7 is closed as superseded.** Retiring the listener would mean building
+>   `uplink/v1` first ([server #21](https://github.com/ParkWardRR/cairn-vehicle-server/issues/21)).
+>
+> **The listener binds `127.0.0.1:8443`, not `:8443`.** See
+> [Switching transport](#switching-transport) — a wildcard bind cannot start on this host.
+> The current deployment is `deploy/deploy-v3.sh`; see also
+> [tailscale-deployment.md](tailscale-deployment.md).
 
 What is actually running, and why each piece is where it is. Current as of
 2026-10-01, when the server first went up as a real service.
@@ -13,8 +25,11 @@ What is actually running, and why each piece is where it is. Current as of
 ## The short version
 
 ```
-device ──── mutual TLS, private CA ────► cairn-server :8443   (systemd, no proxy)
-browser ─── Let's Encrypt via Caddy ───► web UI :443          (Caddy, DNS-01)
+dongle over LTE ─► Tailscale Funnel :8443 ─► tailscaled ─┐
+dongle on the LAN ───────── (no route today) ────────────┤
+                                                         ▼
+                      mutual TLS, private CA ──► cairn-server 127.0.0.1:8443  (systemd, no proxy)
+browser ─── Let's Encrypt via Caddy ───────────► web UI :443                  (Caddy, DNS-01)
 ```
 
 Two separate paths on purpose. The device path is deliberately not behind the
@@ -80,7 +95,7 @@ The startup line states the security posture, and is worth reading rather than
 assuming:
 
 ```
-cairn ingest starting addr=:8443 tls=true client_auth=true \
+cairn ingest starting addr=127.0.0.1:8443 tls=true client_auth=true \
   receipt_key_id=cde936abd43d9703 devices=1
 ```
 
@@ -123,8 +138,24 @@ The CA private key stays on the workstation. Only `ca.pem`, `server.pem` and
 Mutual TLS, the intended configuration:
 
 ```
-CAIRN_ARGS=-addr :8443 -data /var/lib/cairn -tls-cert /etc/cairn/certs/server.pem -tls-key /etc/cairn/certs/server-key.pem -tls-client-ca /etc/cairn/certs/ca.pem
+CAIRN_ARGS=-addr 127.0.0.1:8443 -data /var/lib/cairn -tls-cert /etc/cairn/certs/server.pem -tls-key /etc/cairn/certs/server-key.pem -tls-client-ca /etc/cairn/certs/ca.pem
 ```
+
+> **`-addr` must name loopback, not the wildcard `:8443`, on any host running
+> `tailscale serve --tcp 8443`** (fixed 2026-10-10). tailscaled listens on the tailnet
+> addresses for port 8443 and forwards to `tcp://localhost:8443`. It claims those addresses
+> the moment they are free, so a wildcard bind then fails
+> `listen tcp :8443: bind: address already in use` and systemd restarts the unit every five
+> seconds, for ever. **Anything that stops the server triggers it** — including
+> `deploy-v3.sh --snapshot`, which stops the unit for the copy. It took ingest down for about
+> two minutes before it was understood.
+>
+> The cost is that there is **no LAN-reachable ingest port**: a device on the local network
+> cannot reach `:8443` any more. Nothing needs it today, because the Wi-Fi uplink is gated off
+> ([firmware #31](https://github.com/ParkWardRR/cairn-esp32-device-firmware/issues/31)) and
+> the phone relay uses the app listener on `:8444`. Re-enabling Wi-Fi means either binding the
+> LAN address and retargeting the serve, or teaching the server a second listener — `-addr`
+> takes one value.
 
 Plaintext, for a device that cannot speak mutual TLS yet:
 

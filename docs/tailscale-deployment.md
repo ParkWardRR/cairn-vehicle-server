@@ -20,9 +20,18 @@ iPhone ── LAN Wi-Fi ───────────► https://cairn.examp
 Dongle ── BLE ──► iPhone ──(either path above)──► relay endpoints on the app listener
 ```
 
-The dongle has no Wi-Fi: the phone carries its bundles ([ble-offload.md](https://github.com/ParkWardRR/cairn-driving-log-selfhosted/blob/main/contracts/ble/v1/offload.md)),
-so the Tailnet path above also carries trip uploads. The legacy `:8443` device listener
-is no longer used by any dongle and is retired once the relay is proven (Cairn #7).
+**Corrected 2026-10-10.** This said the dongle has no Wi-Fi and that the `:8443` device
+listener is unused — both were out of date. The dongle has Wi-Fi and LTE again
+([front door #19](https://github.com/ParkWardRR/cairn-driving-log-selfhosted/issues/19)), and
+`:8443` is the path it actually uploads through: over LTE, via a **Funnel** ingress on this
+same host (`tcp://cairn.<tailnet>.ts.net:8443`, raw `--tcp` so mTLS survives end to end).
+The phone relay over BLE ([ble-offload.md](https://github.com/ParkWardRR/cairn-driving-log-selfhosted/blob/main/contracts/ble/v1/offload.md))
+is one path of several, not a replacement, and Cairn #7 is closed as superseded.
+
+Two consequences worth knowing here: `cairn-server` must bind **`127.0.0.1:8443`** so it does
+not compete with tailscaled for the tailnet address, and because Funnel presents a raw TCP
+stream, **TLS runs on the ESP32 rather than in the cellular modem** — Funnel needs SNI to
+demultiplex.
 
 The two app URLs are *one logical account* in the app, not two databases.
 
