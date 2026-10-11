@@ -559,7 +559,13 @@ The dashboard reads the store, not the server's internals, and the store has a v
   `boot_id`.
 - **Endpoints:** `POST /query`, `GET /healthz`, `/capabilities`, `/status`, `/metrics`, `POST /reload`, and
   `GET /snapshot` (a Parquet archive, optionally `?vehicle=` and `?format=`).
-- `/healthz` reports the build and `store_contract` (`store/v1.3`), so a deploy check notices a release that dropped a view.
+- `/healthz` reports the build and `store_contract` (`store/v1.4`), so a deploy check notices a release that dropped a view.
+  The build identity carries the **channel** as well as the version and commit, and a binary built from a
+  modified tree reports `dev` whatever it was told to claim:
+
+  ```json
+  {"build":{"version":"v0.1.0","commit":"fc86c630...","channel":"stable"},"status":"ok","store_contract":"store/v1.4"}
+  ```
   `/capabilities` lists the live catalogue with a schema fingerprint.
 
 ### The compatible-range check
