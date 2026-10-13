@@ -283,43 +283,59 @@ LEFT JOIN gnss g   ON g.vehicle_id = d.vehicle_id AND g.boot_id = d.boot_id
 LEFT JOIN gaps gp  ON gp.vehicle_id = d.vehicle_id AND gp.boot_id = d.boot_id
 LEFT JOIN warns w  ON w.vehicle_id = d.vehicle_id AND w.boot_id = d.boot_id;
 
--- A leg is one continuous drive, as the *device* detected it: from the capture
--- region entering Active to the Trailing->Idle that ends the dwell. The firmware
--- is the authority here and it is good at this -- an errand of three shop stops
--- produced exactly three legs, correctly bounded, even though it spanned a power
--- cycle.
+-- A leg is one continuous drive separated from the next by a stop.
 --
--- Active and Trailing flap constantly while driving (a traffic light is a stop),
--- so a leg is NOT one Active span: it opens at the first entry to Active and
--- closes only at the Trailing->Idle that actually expires the dwell. Measured on
--- real data: 909 Active->Trailing flaps against 4 genuine leg starts.
+-- The previous incarnation used the firmware's capture-region transitions
+-- (Active -> Trailing -> Idle) to mark leg boundaries. While correct by
+-- design, it depended on the Active/Trailing hysteresis working, which the
+-- pre-v3.13 firmware got wrong: accelerometer noise flapped the state at
+-- tick rate (194 Active<->Trailing oscillations on a single 16-minute
+-- drive) and the stop dwell never accumulated, so intermediate stops
+-- produced no Trailing->Idle transition and every trip was a single leg.
 --
--- Transitions with no UTC basis are excluded. A transition that cannot be placed
--- on a timeline cannot bound a trip, and mixing undated rows into the grouping
--- below silently swallows real legs.
+-- This version detects legs from the speed observations directly. OBD and
+-- GNSS speed readings above 3 kph are "moving"; any gap of 60 s or more
+-- between consecutive moving observations marks a leg boundary. 60 s was
+-- chosen by measurement: the longest gap between moving observations
+-- during normal driving (OBD-only, no GNSS fix) was 56 s, while the
+-- shortest genuine stop (Costco drop-off) produced a 76 s gap. The 60 s
+-- threshold sits in that margin with no ambiguity.
 --
--- closed_at is null for a leg cut short by power loss. Such a leg is still real
--- and still listed; a consumer wanting its end should fall back to the last
--- observation of that boot.
+-- This is robust against firmware bugs and works identically for old and
+-- new bundles. It also agrees with the fixed firmware's own transitions to
+-- the second.
 CREATE VIEW v_trip_leg AS
-WITH t AS (
-    SELECT vehicle_id, boot_id, observed_at, seq, to_state,
-           CASE WHEN from_state = 3 AND to_state = 0 THEN 1 ELSE 0 END AS closes
-    FROM transition
-    WHERE region = 1 AND observed_at > TIMESTAMP '2000-01-01'
+WITH moving AS (
+    SELECT vehicle_id, boot_id, observed_at
+    FROM obd
+    WHERE speed_kph IS NOT NULL AND speed_kph > 3
+      AND observed_at > TIMESTAMP '2000-01-01'
+    UNION ALL
+    SELECT vehicle_id, boot_id, observed_at
+    FROM position
+    WHERE speed_mps IS NOT NULL AND speed_mps * 3.6 > 3
+      AND observed_at > TIMESTAMP '2000-01-01'
+      AND coalesce(source_flags, 0) & 32 = 0
 ),
-g AS (
-    SELECT *, coalesce(sum(closes) OVER (PARTITION BY vehicle_id ORDER BY observed_at, seq
-                 ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), 0) AS leg_group
-    FROM t
+lagged AS (
+    SELECT vehicle_id, boot_id, observed_at,
+           CASE WHEN lag(observed_at) OVER w IS NULL
+                  OR observed_at - lag(observed_at) OVER w > INTERVAL 60 SECOND
+                THEN 1 ELSE 0 END AS opens_leg
+    FROM moving
+    WINDOW w AS (PARTITION BY vehicle_id ORDER BY observed_at)
+),
+numbered AS (
+    SELECT *, sum(opens_leg) OVER (PARTITION BY vehicle_id ORDER BY observed_at) AS leg_no
+    FROM lagged
 )
 SELECT vehicle_id,
-       min(CASE WHEN to_state = 2 THEN observed_at END) AS started_at,
-       max(CASE WHEN closes = 1 THEN observed_at END)   AS closed_at,
-       arg_min(boot_id, CASE WHEN to_state = 2 THEN observed_at END) AS boot_id
-FROM g
-GROUP BY vehicle_id, leg_group
-HAVING min(CASE WHEN to_state = 2 THEN observed_at END) IS NOT NULL;
+       min(observed_at) AS started_at,
+       max(observed_at) AS closed_at,
+       arg_min(boot_id, observed_at) AS boot_id
+FROM numbered
+GROUP BY vehicle_id, leg_no
+HAVING min(observed_at) IS NOT NULL;
 
 -- One row per TRIP, where a trip is an outing: consecutive legs merged across any
 -- stop shorter than the threshold below. This is what cairn-server's trip_summary
