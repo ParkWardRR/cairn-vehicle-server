@@ -350,11 +350,11 @@ HAVING min(observed_at) IS NOT NULL;
 -- longer the key, because when the device power-cycles is not a fact about the
 -- driving.
 --
--- THE 20 MINUTE THRESHOLD IS THE ONE KNOB. Stops shorter than this are part of
--- the trip; longer, and the next leg starts a new one. Chosen from the real
--- errand (stops of 9.9 and 7.0 minutes, which must merge) against the longest
--- in-trip data gap ever measured (46 s, so there is no risk of splitting mid-leg).
--- Raise it if shopping trips still split; lower it if separate outings merge.
+-- THE 60 MINUTE THRESHOLD IS THE ONE KNOB. Stops shorter than this are part of
+-- the trip; longer, and the next leg starts a new one. Raised from 20 minutes
+-- after an Oct 12 errand (Home → Costco → Golf → Home) split into three trips
+-- because the stops were 33 and 50 minutes. 60 minutes covers any normal
+-- shopping or errand stop; a gap longer than an hour is a separate outing.
 --
 -- duration_ms is the wall-clock span including the stops, which is what "8:28 PM
 -- to 9:17 PM" means to a reader. driving_ms is the legs only, so the two together
@@ -390,7 +390,7 @@ WITH obs AS (
 marked AS (
     SELECT vehicle_id, observed_at,
            CASE WHEN lag(observed_at) OVER w IS NULL
-                  OR observed_at - lag(observed_at) OVER w > INTERVAL 20 MINUTE
+                  OR observed_at - lag(observed_at) OVER w > INTERVAL 60 MINUTE
                 THEN 1 ELSE 0 END AS opens_trip
     FROM obs
     WINDOW w AS (PARTITION BY vehicle_id ORDER BY observed_at)
