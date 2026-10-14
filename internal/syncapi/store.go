@@ -79,6 +79,7 @@ const (
 	entityTypeVehicle     = "vehicle"
 	entityTypeAssignment  = "assignment"
 	EntityTypeTripSummary = "trip_summary"
+	tombstoneDigest       = "tombstone"
 )
 
 // mutableKinds hold app-owned metadata that more than one client may edit, so
@@ -481,6 +482,22 @@ func (s *Store) Epoch() string {
 	return s.epoch
 }
 
+// PublishedEntityIDs returns all entity IDs of the given type that have been
+// published into the log. The caller can compare this against the current
+// source of truth to find stale entries that need tombstoning.
+func (s *Store) PublishedEntityIDs(entityType string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	prefix := entityType + "/"
+	var ids []string
+	for key, digest := range s.main.ent {
+		if strings.HasPrefix(key, prefix) && digest != tombstoneDigest {
+			ids = append(ids, strings.TrimPrefix(key, prefix))
+		}
+	}
+	return ids
+}
+
 // Head is the highest assigned sequence (0 when the log is empty).
 func (s *Store) Head() uint64 {
 	s.mu.Lock()
@@ -826,6 +843,37 @@ func (s *Store) Publish(e Entity) (seq uint64, changed bool, err error) {
 		return 0, false, nil
 	}
 	return s.Head(), true, nil
+}
+
+// Tombstone marks an entity as deleted by publishing a record with null data.
+// Clients that receive this record should remove the entity. Idempotent: a
+// second tombstone for the same entity is a no-op.
+func (s *Store) Tombstone(entityType, entityID, vehicleID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.broken != nil {
+		return false, s.broken
+	}
+
+	key := entityType + "/" + entityID
+	if prev, ok := s.main.ent[key]; ok && prev == tombstoneDigest {
+		return false, nil
+	}
+
+	next := s.headLocked() + 1
+	rec := &record{
+		T: recEntity, Seq: next, At: s.now().UnixMilli(),
+		EntityType: entityType, EntityID: entityID,
+		VehicleID: strings.ToLower(vehicleID),
+		Digest:    tombstoneDigest,
+		Data:      nil,
+	}
+	if err := s.appendLocked([]*record{rec}); err != nil {
+		return false, err
+	}
+	_ = indexRecord(s.main, rec)
+	s.recs = append(s.recs, rec)
+	return true, nil
 }
 
 // publishMany appends every entity whose content differs from the last

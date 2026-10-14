@@ -161,6 +161,7 @@ func (p *TripPublisher) Once(ctx context.Context) (int, error) {
 		return v
 	}
 
+	currentIDs := make(map[string]string) // trip_id -> vehicle_id
 	changed := 0
 	for _, r := range res.Rows {
 		// boot_id is informational now, so an outing with no OBD rows -- and so
@@ -198,6 +199,7 @@ func (p *TripPublisher) Once(ctx context.Context) (int, error) {
 		 * overlapping span rather than on the id alone.
 		 */
 		id := vehicle + ":" + strconv.FormatInt(integer(r, "started_ms"), 10)
+		currentIDs[id] = vehicle
 		_, did, err := p.Store.Publish(Entity{Type: EntityTypeTripSummary, ID: id, VehicleID: vehicle, Data: data})
 		if err != nil {
 			return changed, fmt.Errorf("publish trip %s:%s: %w", vehicle, boot, err)
@@ -206,6 +208,24 @@ func (p *TripPublisher) Once(ctx context.Context) (int, error) {
 			changed++
 		}
 	}
+
+	for _, id := range p.Store.PublishedEntityIDs(EntityTypeTripSummary) {
+		if _, ok := currentIDs[id]; ok {
+			continue
+		}
+		vehicle := id
+		if i := strings.Index(id, ":"); i > 0 {
+			vehicle = id[:i]
+		}
+		did, err := p.Store.Tombstone(EntityTypeTripSummary, id, vehicle)
+		if err != nil {
+			return changed, fmt.Errorf("tombstone trip %s: %w", id, err)
+		}
+		if did {
+			changed++
+		}
+	}
+
 	return changed, nil
 }
 

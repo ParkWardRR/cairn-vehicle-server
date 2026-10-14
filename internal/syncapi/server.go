@@ -677,6 +677,7 @@ type change struct {
 	EntityID       string          `json:"entity_id,omitempty"`
 	VehicleID      string          `json:"vehicle_id,omitempty"`
 	Data           json.RawMessage `json:"data,omitempty"`
+	Deleted        bool            `json:"deleted,omitempty"`
 }
 
 func (s *Server) handlePull(q *request) (int, string) {
@@ -732,6 +733,9 @@ func (s *Server) handlePull(q *request) (int, string) {
 			c.Type, c.Operation = "operation", rec.Op
 		} else {
 			c.Type, c.EntityType, c.EntityID, c.VehicleID, c.Data = "entity", rec.EntityType, rec.EntityID, rec.VehicleID, rec.Data
+			if rec.Digest == tombstoneDigest {
+				c.Deleted = true
+			}
 		}
 		changes = append(changes, c)
 	}
