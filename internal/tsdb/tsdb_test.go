@@ -149,7 +149,7 @@ func TestDriveSummary(t *testing.T) {
 		('v1', 'abc', 'A', 'MAPSaturated'), ('v1', 'def', 'B', '')`)
 
 	res, err := db.Query(ctx,
-		"SELECT boot_id, duration_s, max_speed_kph, max_rpm, obd_samples, gnss_samples, fix_samples, gap_count, gap_duration_ms, warnings FROM v_drive_summary ORDER BY boot_id", 0)
+		"SELECT boot_id, duration_s, max_speed_kph, max_rpm, obd_samples, gnss_samples, fix_samples, gap_count, gap_duration_ms, max_gap_ms, warnings FROM v_drive_summary ORDER BY boot_id", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,8 +181,11 @@ func TestDriveSummary(t *testing.T) {
 	if a[7] != int64(1) {
 		t.Errorf("gap_count = %v (%T), want 1", a[7], a[7])
 	}
-	if a[9] != "MAPSaturated" {
-		t.Errorf("warnings = %v, want MAPSaturated", a[9])
+	if a[9] != uint32(42000) {
+		t.Errorf("max_gap_ms = %v (%T), want 42000", a[9], a[9])
+	}
+	if a[10] != "MAPSaturated" {
+		t.Errorf("warnings = %v, want MAPSaturated", a[10])
 	}
 
 	// Boot B: no gnss, no gaps, no warnings
@@ -193,8 +196,11 @@ func TestDriveSummary(t *testing.T) {
 	if b[7] != int64(0) {
 		t.Errorf("B gap_count = %v, want 0", b[7])
 	}
-	if b[9] != nil {
-		t.Errorf("B warnings = %v, want nil", b[9])
+	if b[9] != uint32(0) {
+		t.Errorf("B max_gap_ms = %v, want 0", b[9])
+	}
+	if b[10] != nil {
+		t.Errorf("B warnings = %v, want nil", b[10])
 	}
 }
 

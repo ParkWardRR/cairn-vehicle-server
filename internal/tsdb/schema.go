@@ -263,7 +263,8 @@ gnss AS (
 gaps AS (
     SELECT vehicle_id, boot_id,
            count(*) AS gap_count,
-           coalesce(sum(duration_ms), 0) AS gap_duration_ms
+           coalesce(sum(duration_ms), 0) AS gap_duration_ms,
+           coalesce(max(duration_ms), 0) AS max_gap_ms
     FROM gap GROUP BY vehicle_id, boot_id
 ),
 warns AS (
@@ -277,6 +278,7 @@ SELECT d.vehicle_id, d.boot_id, d.duration_s, d.max_speed_kph, d.max_rpm, d.obd_
        coalesce(g.phone_samples, 0) AS phone_samples,
        coalesce(gp.gap_count, 0) AS gap_count,
        coalesce(gp.gap_duration_ms, 0) AS gap_duration_ms,
+       coalesce(gp.max_gap_ms, 0) AS max_gap_ms,
        w.warnings
 FROM drive d
 LEFT JOIN gnss g   ON g.vehicle_id = d.vehicle_id AND g.boot_id = d.boot_id
@@ -457,7 +459,8 @@ t_bst AS (
 ),
 t_gaps AS (
     SELECT s.vehicle_id, s.trip_no, count(*) AS gap_count,
-           coalesce(sum(gg.duration_ms), 0) AS gap_duration_ms
+           coalesce(sum(gg.duration_ms), 0) AS gap_duration_ms,
+           coalesce(max(gg.duration_ms), 0) AS max_gap_ms
     FROM gap gg JOIN t_span s
       ON s.vehicle_id = gg.vehicle_id AND gg.started_at BETWEEN s.started_at AND s.ended_at
     GROUP BY 1, 2
@@ -500,6 +503,7 @@ SELECT s.vehicle_id, b0.boot_id, h.device_id,
        coalesce(b.boost_samples, 0) AS boost_samples,
        coalesce(gp.gap_count, 0) AS gap_count,
        coalesce(gp.gap_duration_ms, 0) AS gap_duration_ms,
+       coalesce(gp.max_gap_ms, 0) AS max_gap_ms,
        h.bundle_ids, coalesce(h.bundle_count, 0) AS bundle_count, h.decoder_version
 FROM t_span s
 LEFT JOIN t_boot b0 ON b0.vehicle_id = s.vehicle_id AND b0.trip_no = s.trip_no

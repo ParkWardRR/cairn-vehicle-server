@@ -47,10 +47,10 @@ import (
 // starts a new boot, so one errand split into several trips; and two legs inside one
 // boot collapsed into one row spanning the stop between them. Measured: home ->
 // Trader Joe's -> Pavillions -> home showed as two rows, one claiming seven hours.
-const StoreContract = "store/v1.4"
+const StoreContract = "store/v1.5"
 
 // schemaFingerprint is the fingerprint of the schema StoreContract describes.
-const schemaFingerprint = "4bd014a21244e86f4d9f3c921c864664536a97ebce6460062e5899e8f4cfef5c"
+const schemaFingerprint = "c2e2cf8aba5f3782d3604ecb7c7bc6f4b7a16d0ebb937d2483158acb8d4d08cf"
 
 // Capabilities is what a running store offers: the objects present in its database.
 type Capabilities struct {
