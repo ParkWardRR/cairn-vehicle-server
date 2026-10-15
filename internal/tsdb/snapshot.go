@@ -26,7 +26,11 @@ import (
 // manifest's vehicle/vehicles fields. A version-1 reader would load the tables
 // and blend every car's trims into one map, so it must refuse rather than
 // guess.
-const SnapshotSchemaVersion = 2
+//
+// Version 3 adds trip_summary (materialised from v_trip_summary): per-trip
+// aggregates including distance, duration, leg count, speed peaks, and sample
+// counts. drive_summary is kept for backwards compatibility.
+const SnapshotSchemaVersion = 3
 
 // SnapshotMeta is the manifest embedded in every snapshot archive.
 type SnapshotMeta struct {
@@ -116,15 +120,21 @@ func (d *DB) SnapshotVehicles() []string {
 // SnapshotFormatNames returns the supported format keys.
 func SnapshotFormatNames() []string { return []string{"zstd", "gzip", "tar"} }
 
-// exportSnapshots materialises v_drive_summary and cuts the unfiltered archive
-// plus one per vehicle. Called during Build() before the DuckDB lockdown.
+// exportSnapshots materialises v_drive_summary and v_trip_summary and cuts the
+// unfiltered archive plus one per vehicle. Called during Build() before the
+// DuckDB lockdown.
 func exportSnapshots(ctx context.Context, sdb *sql.DB, report *Report) (snapshotSet, error) {
-	// Materialise v_drive_summary as a real table for export, then drop it
-	// afterwards so the view definition can be created normally.
+	// Materialise summary views as real tables for export, then drop them
+	// afterwards so the view definitions can be created normally.
 	if _, err := sdb.ExecContext(ctx, "CREATE TABLE drive_summary AS SELECT * FROM v_drive_summary"); err != nil {
 		return nil, fmt.Errorf("materialise drive_summary: %w", err)
 	}
 	defer sdb.ExecContext(ctx, "DROP TABLE IF EXISTS drive_summary")
+
+	if _, err := sdb.ExecContext(ctx, "CREATE TABLE trip_summary AS SELECT * FROM v_trip_summary"); err != nil {
+		return nil, fmt.Errorf("materialise trip_summary: %w", err)
+	}
+	defer sdb.ExecContext(ctx, "DROP TABLE IF EXISTS trip_summary")
 
 	rows, err := sdb.QueryContext(ctx, "SELECT DISTINCT vehicle_id FROM bundles ORDER BY vehicle_id")
 	if err != nil {
@@ -176,9 +186,9 @@ func exportSnapshot(ctx context.Context, sdb *sql.DB, report *Report, vehicle st
 	}
 	defer os.RemoveAll(dir)
 
-	tables := make([]string, 0, len(snapshotTables)+1)
+	tables := make([]string, 0, len(snapshotTables)+2)
 	tables = append(tables, snapshotTables...)
-	tables = append(tables, "drive_summary")
+	tables = append(tables, "drive_summary", "trip_summary")
 
 	where := ""
 	if vehicle != "" {
