@@ -177,6 +177,11 @@ func Build(ctx context.Context, snap *Snapshot, notes []string, opts Options) (*
 	if err := reconcile(ctx, sdb, loaded, &report); err != nil {
 		return fail(err)
 	}
+	// Before anything reads a time: the derivations and every view after them see the
+	// repaired dates. See basis.go.
+	if err := repairUndatedBundles(ctx, sdb, &report); err != nil {
+		return fail(err)
+	}
 
 	// Derive, then order, then build the views. Derivations have to precede the views
 	// because a view may read a derived column, and they follow the load because an
