@@ -296,14 +296,18 @@ LEFT JOIN warns w  ON w.vehicle_id = d.vehicle_id AND w.boot_id = d.boot_id;
 -- max speed.
 --
 -- Two physical rules, each measured against every stored drive before it went in:
---   * a fix claiming >= 8 m/s (29 kph) while the IMU's RMS stays under 35 mg for the whole
---     second either side. Driving at that speed was never seen below 87 mg at the 2nd
---     percentile; idling is 8-9. Zero hits on any other boot.
+--   * a fix claiming >= 8 m/s (29 kph) while the IMU's RMS drops under 35 mg in its own
+--     second or any of the three either side. Driving at that speed sat at 87 mg or more at the 2nd
+--     percentile on every current-firmware drive; idling is 8-9. The only other hits are 8
+--     fixes of the oldest bundles, whose IMU read low even while driving. The car creeping
+--     through a parking structure reads 40-59 mg, which is why the window takes the quietest
+--     second rather than the loudest, and why it spans three seconds a side: 2 of the 37
+--     fixes sat between two such moments.
 --   * a speed that changes by more than 10 m/s^2 between fixes at most 2 s apart. That is
 --     over 1 g, beyond a road car's braking; the receiver, not the car, did it. Both fixes
 --     of the pair are untrusted because the data cannot say which one is wrong.
--- Together they catch 35 of the 37 fixes. Elsewhere they drop 4 fixes in 13,000 -- the two
--- ends of a real receiver jump after a gap.
+-- Together they catch all 37 fixes. Elsewhere they drop about a dozen in 13,000: the
+-- two ends of a real receiver jump after a gap, and the legacy fixes above.
 --
 -- 'trusted' is the verdict; the position row is otherwise untouched, so nothing is
 -- discarded and a consumer that wants the raw receiver can still read position. Phone
@@ -317,8 +321,8 @@ WITH imu_s AS (
 ),
 imu_near AS (
     SELECT vehicle_id, boot_id, s,
-           max(rms) OVER (PARTITION BY vehicle_id, boot_id ORDER BY s
-                          RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING) AS rms_near
+           min(rms) OVER (PARTITION BY vehicle_id, boot_id ORDER BY s
+                          RANGE BETWEEN 3 PRECEDING AND 3 FOLLOWING) AS rms_quiet
     FROM imu_s
 ),
 fixes AS (
@@ -334,7 +338,7 @@ SELECT f.vehicle_id, f.content_root, f.boot_id, f.mono_ms, f.seq, f.observed_at,
        f.sats_used, f.sats_visible, f.hdop, f.h_acc_m, f.v_acc_m, f.utc_acc_ms,
        f.source_flags, f.frame_flags,
        NOT coalesce(
-           (f.speed_mps >= 8 AND i.rms_near < 35)
+           (f.speed_mps >= 8 AND i.rms_quiet < 35)
            OR (f.prev_ms IS NOT NULL AND f.mono_ms > f.prev_ms AND f.mono_ms - f.prev_ms <= 2000
                AND abs(f.speed_mps - f.prev_speed) * 1000.0 / (f.mono_ms - f.prev_ms) > 10)
            OR (f.next_ms IS NOT NULL AND f.next_ms > f.mono_ms AND f.next_ms - f.mono_ms <= 2000
