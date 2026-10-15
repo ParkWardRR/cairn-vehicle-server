@@ -47,10 +47,15 @@ import (
 // starts a new boot, so one errand split into several trips; and two legs inside one
 // boot collapsed into one row spanning the stop between them. Measured: home ->
 // Trader Joe's -> Pavillions -> home showed as two rows, one claiming seven hours.
-const StoreContract = "store/v1.5"
+//
+// store/v1.6 adds, all additive: the view v_position_trusted, position plus a `trusted`
+// verdict that is false for a GNSS fix the accelerometer or physics contradicts. v_trip_leg
+// and v_trip_summary now read it, so a receiver's phantom run no longer makes a leg, a
+// distance or a max speed.
+const StoreContract = "store/v1.6"
 
 // schemaFingerprint is the fingerprint of the schema StoreContract describes.
-const schemaFingerprint = "c2e2cf8aba5f3782d3604ecb7c7bc6f4b7a16d0ebb937d2483158acb8d4d08cf"
+const schemaFingerprint = "907d90832aa46af2f7a536dfe4cf074f19179f9c1d86324247bd203b5a5c3733"
 
 // Capabilities is what a running store offers: the objects present in its database.
 type Capabilities struct {

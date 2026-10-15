@@ -285,6 +285,65 @@ LEFT JOIN gnss g   ON g.vehicle_id = d.vehicle_id AND g.boot_id = d.boot_id
 LEFT JOIN gaps gp  ON gp.vehicle_id = d.vehicle_id AND gp.boot_id = d.boot_id
 LEFT JOIN warns w  ON w.vehicle_id = d.vehicle_id AND w.boot_id = d.boot_id;
 
+-- A GNSS fix the car's own accelerometer contradicts.
+--
+-- The 2026-10-14 evening drive ended with 37 fixes, 03:18:11 to 03:18:58 UTC, tracing a
+-- 2.7 km run north at 33-49 m/s (up to 107 mph) from the car's parking spot. The car was
+-- stopped: OBD speed read 0-3 kph, the state machine had closed the capture, and the IMU
+-- sat at 8-9 mg RMS, the engine-idle floor. The run was self-consistent -- positions
+-- agreed with the speeds the receiver reported -- so a speed-from-positions check cannot
+-- see it, and it drew a spur at the end of the trip, ran a phantom leg, and set the trip's
+-- max speed.
+--
+-- Two physical rules, each measured against every stored drive before it went in:
+--   * a fix claiming >= 8 m/s (29 kph) while the IMU's RMS stays under 35 mg for the whole
+--     second either side. Driving at that speed was never seen below 87 mg at the 2nd
+--     percentile; idling is 8-9. Zero hits on any other boot.
+--   * a speed that changes by more than 10 m/s^2 between fixes at most 2 s apart. That is
+--     over 1 g, beyond a road car's braking; the receiver, not the car, did it. Both fixes
+--     of the pair are untrusted because the data cannot say which one is wrong.
+-- Together they catch 35 of the 37 fixes. Elsewhere they drop 4 fixes in 13,000 -- the two
+-- ends of a real receiver jump after a gap.
+--
+-- 'trusted' is the verdict; the position row is otherwise untouched, so nothing is
+-- discarded and a consumer that wants the raw receiver can still read position. Phone
+-- fixes (source_flags bit 5) are paired only with other phone fixes. A fix with no IMU
+-- within a second is judged by the kinematic rule alone: absence of evidence is not a
+-- contradiction.
+CREATE VIEW v_position_trusted AS
+WITH imu_s AS (
+    SELECT vehicle_id, boot_id, CAST(mono_ms // 1000 AS BIGINT) AS s, avg(accel_rms_mg) AS rms
+    FROM imu GROUP BY 1, 2, 3
+),
+imu_near AS (
+    SELECT vehicle_id, boot_id, s,
+           max(rms) OVER (PARTITION BY vehicle_id, boot_id ORDER BY s
+                          RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING) AS rms_near
+    FROM imu_s
+),
+fixes AS (
+    SELECT p.*,
+           lag(p.speed_mps)  OVER w AS prev_speed, lag(p.mono_ms)  OVER w AS prev_ms,
+           lead(p.speed_mps) OVER w AS next_speed, lead(p.mono_ms) OVER w AS next_ms
+    FROM position p
+    WINDOW w AS (PARTITION BY p.vehicle_id, p.boot_id, coalesce(p.source_flags, 0) & 32
+                 ORDER BY p.mono_ms, p.seq)
+)
+SELECT f.vehicle_id, f.content_root, f.boot_id, f.mono_ms, f.seq, f.observed_at,
+       f.lat, f.lon, f.alt_m, f.speed_mps, f.heading_deg, f.fix_type,
+       f.sats_used, f.sats_visible, f.hdop, f.h_acc_m, f.v_acc_m, f.utc_acc_ms,
+       f.source_flags, f.frame_flags,
+       NOT coalesce(
+           (f.speed_mps >= 8 AND i.rms_near < 35)
+           OR (f.prev_ms IS NOT NULL AND f.mono_ms > f.prev_ms AND f.mono_ms - f.prev_ms <= 2000
+               AND abs(f.speed_mps - f.prev_speed) * 1000.0 / (f.mono_ms - f.prev_ms) > 10)
+           OR (f.next_ms IS NOT NULL AND f.next_ms > f.mono_ms AND f.next_ms - f.mono_ms <= 2000
+               AND abs(f.next_speed - f.speed_mps) * 1000.0 / (f.next_ms - f.mono_ms) > 10),
+           FALSE) AS trusted
+FROM fixes f
+LEFT JOIN imu_near i ON i.vehicle_id = f.vehicle_id AND i.boot_id = f.boot_id
+    AND i.s = CAST(f.mono_ms // 1000 AS BIGINT);
+
 -- A leg is one continuous drive separated from the next by a stop.
 --
 -- The previous incarnation used the firmware's capture-region transitions
@@ -314,8 +373,8 @@ WITH moving AS (
       AND observed_at > TIMESTAMP '2000-01-01'
     UNION ALL
     SELECT vehicle_id, boot_id, observed_at
-    FROM position
-    WHERE speed_mps IS NOT NULL AND speed_mps * 3.6 > 3
+    FROM v_position_trusted
+    WHERE trusted AND speed_mps IS NOT NULL AND speed_mps * 3.6 > 3
       AND observed_at > TIMESTAMP '2000-01-01'
       AND coalesce(source_flags, 0) & 32 = 0
 ),
@@ -421,9 +480,9 @@ t_fixes AS (
     SELECT s.vehicle_id, s.trip_no, p.mono_ms, p.lat, p.lon, p.speed_mps,
            lag(p.mono_ms) OVER w AS prev_ms,
            lag(p.lat) OVER w AS prev_lat, lag(p.lon) OVER w AS prev_lon
-    FROM position p JOIN t_span s
+    FROM v_position_trusted p JOIN t_span s
       ON s.vehicle_id = p.vehicle_id AND p.observed_at BETWEEN s.started_at AND s.ended_at
-    WHERE p.fix_type > 0 AND coalesce(p.source_flags, 0) & 32 = 0
+    WHERE p.trusted AND p.fix_type > 0 AND coalesce(p.source_flags, 0) & 32 = 0
     WINDOW w AS (PARTITION BY s.vehicle_id, s.trip_no, p.boot_id ORDER BY p.mono_ms, p.seq)
 ),
 t_gnss AS (
