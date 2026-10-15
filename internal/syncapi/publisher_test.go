@@ -94,7 +94,12 @@ func TestPublisherPublishesIdempotentlyAndPerVehicle(t *testing.T) {
 	}
 
 	// A reprocessed trip (more samples) publishes a new version of the same entity.
-	rows.Store(`[["` + e.n20.ID + `","bootA","dev1",540000,3,1790000000000,1790000600000,600000,5230,2410,2500,6100,310,590,300,1,4000,1,4]]`)
+	// The B58's trip is still listed, unchanged: a trip that vanishes from the store is
+	// tombstoned (see the stale-trip tests), which is a change of its own.
+	rows.Store(`[
+	  ["` + e.n20.ID + `","bootA","dev1",540000,3,1790000000000,1790000600000,600000,5230,2410,2500,6100,310,590,300,1,4000,1,4],
+	  ["` + e.b58.ID + `","bootB","dev1",300000,1,1790001000000,1790001300000,300000,2100,3100,3200,5200,150,290,150,0,0,1,3]
+	]`)
 	changed, err = pub.Once(context.Background())
 	if err != nil || changed != 1 {
 		t.Fatalf("after reprocessing = %d, %v; want exactly the changed trip", changed, err)

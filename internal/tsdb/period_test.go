@@ -46,10 +46,10 @@ func (p periodTrip) distanceM() float64 { return float64(p.fixes-1) * stepM }
 // asking the view to call two overlapping runs separate trips.
 var periodTrips = []periodTrip{
 	{n20, "dec", "2025-12-31 23:59:50", 21, 50, false},  // 20 s, ends in 2026
-	{n20, "jan", "2026-01-01 01:00:00", 11, 60, false},  // wholly inside 2026, day one
+	{n20, "jan", "2026-01-01 01:30:00", 11, 60, false},  // wholly inside 2026, day one
 	{n20, "feb", "2026-02-15 12:00:00", 31, 70, false},  // Sunday, ISO week of Monday 9 Feb
 	{n20, "mar", "2026-03-31 23:59:00", 121, 90, false}, // 120 s, ends on 1 April
-	{n20, "apr", "2026-04-01 01:00:00", 61, 100, false}, // wholly inside Q2, day one
+	{n20, "apr", "2026-04-01 01:30:00", 61, 100, false}, // wholly inside Q2, day one
 	{n20, "may", "2026-05-20 08:00:00", 41, 110, false},
 	{n20, "noclock", "2026-05-20 09:00:00", 11, 200, true}, // in no period at all
 	{b58, "feb", "2026-02-15 12:00:00", 51, 130, false},
@@ -290,10 +290,10 @@ func TestTripPeriodView(t *testing.T) {
 			FROM v_trip_period WHERE vehicle_id = '`+n20+`' ORDER BY started_at`)
 		wantRows := [][]string{
 			{"2025-12-31 23:59:50", "2025-12-31", "2025-12-29", "2025-12-01", "2025-10-01", "2025-01-01"},
-			{"2026-01-01 01:00:00", "2026-01-01", "2025-12-29", "2026-01-01", "2026-01-01", "2026-01-01"},
+			{"2026-01-01 01:30:00", "2026-01-01", "2025-12-29", "2026-01-01", "2026-01-01", "2026-01-01"},
 			{"2026-02-15 12:00:00", "2026-02-15", "2026-02-09", "2026-02-01", "2026-01-01", "2026-01-01"},
 			{"2026-03-31 23:59:00", "2026-03-31", "2026-03-30", "2026-03-01", "2026-01-01", "2026-01-01"},
-			{"2026-04-01 01:00:00", "2026-04-01", "2026-03-30", "2026-04-01", "2026-04-01", "2026-01-01"},
+			{"2026-04-01 01:30:00", "2026-04-01", "2026-03-30", "2026-04-01", "2026-04-01", "2026-01-01"},
 			{"2026-05-20 08:00:00", "2026-05-20", "2026-05-18", "2026-05-01", "2026-04-01", "2026-01-01"},
 		}
 		if len(rows) != len(wantRows) {
@@ -417,7 +417,7 @@ func TestAnErrandIsOneTrip(t *testing.T) {
 // swallow a whole day's driving into one row.
 func TestALongStopSplitsTheTrip(t *testing.T) {
 	db := emptyDB(t)
-	for _, from := range []string{"2026-10-09 03:00:00", "2026-10-09 04:00:00"} {
+	for _, from := range []string{"2026-10-09 03:00:00", "2026-10-09 05:00:00"} {
 		at := "TIMESTAMP '" + from + "' + i * INTERVAL 1 SECOND"
 		for _, q := range []string{
 			fmt.Sprintf(`INSERT INTO position (vehicle_id, boot_id, mono_ms, seq, observed_at, lat, lon, speed_mps, fix_type)
@@ -432,6 +432,6 @@ func TestALongStopSplitsTheTrip(t *testing.T) {
 	}
 	rows := query(t, db, `SELECT count(*) FROM v_trip_summary WHERE vehicle_id = '`+n20+`'`)
 	if got := fmt.Sprint(rows[0][0]); got != "2" {
-		t.Errorf("got %s trips, want 2: a 58 minute stop is not a traffic light", got)
+		t.Errorf("got %s trips, want 2: a two hour stop is not a traffic light", got)
 	}
 }

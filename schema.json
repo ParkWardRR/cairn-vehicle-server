@@ -1,0 +1,1514 @@
+{
+  "contract": "store/v1",
+  "store_contract": "store/v1.6",
+  "tables": {
+    "boost": {
+      "columns": [
+        {
+          "name": "vehicle_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "content_root",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "boot_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "mono_ms",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "seq",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "observed_at",
+          "type": "TIMESTAMP"
+        },
+        {
+          "name": "map_kpa",
+          "type": "USMALLINT"
+        },
+        {
+          "name": "baro_kpa",
+          "type": "UTINYINT"
+        },
+        {
+          "name": "maf_cgps",
+          "type": "USMALLINT"
+        },
+        {
+          "name": "lambda_e4",
+          "type": "USMALLINT"
+        },
+        {
+          "name": "abs_load_raw",
+          "type": "USMALLINT"
+        },
+        {
+          "name": "ambient_c",
+          "type": "TINYINT"
+        },
+        {
+          "name": "stft_pct",
+          "type": "TINYINT"
+        },
+        {
+          "name": "ltft_pct",
+          "type": "TINYINT"
+        },
+        {
+          "name": "fuel_level_pct",
+          "type": "UTINYINT"
+        },
+        {
+          "name": "pedal_pct",
+          "type": "UTINYINT"
+        },
+        {
+          "name": "boost_psi",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "lambda_ratio",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "pids_requested",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "pids_answered",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "poll_cadence_ms",
+          "type": "USMALLINT"
+        }
+      ]
+    },
+    "bundles": {
+      "columns": [
+        {
+          "name": "content_root",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "vehicle_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "bundle_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "device_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "boot_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "origin",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "decoder_ver",
+          "type": "INTEGER"
+        },
+        {
+          "name": "output_digest",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "reproduced",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "decode_ms",
+          "type": "INTEGER"
+        },
+        {
+          "name": "n_position",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "n_imu",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "n_obd",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "n_boost",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "n_status",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "n_transition",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "n_gap",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "unknown_records",
+          "type": "INTEGER"
+        },
+        {
+          "name": "warnings",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "size_bytes",
+          "type": "UBIGINT"
+        },
+        {
+          "name": "duration_ms",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "received_at",
+          "type": "TIMESTAMP"
+        }
+      ]
+    },
+    "gap": {
+      "columns": [
+        {
+          "name": "vehicle_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "content_root",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "boot_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "seq",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "started_at",
+          "type": "TIMESTAMP"
+        },
+        {
+          "name": "duration_ms",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "expected_samples",
+          "type": "USMALLINT"
+        },
+        {
+          "name": "cause",
+          "type": "UTINYINT"
+        }
+      ]
+    },
+    "imu": {
+      "columns": [
+        {
+          "name": "vehicle_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "content_root",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "boot_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "mono_ms",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "seq",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "observed_at",
+          "type": "TIMESTAMP"
+        },
+        {
+          "name": "window_ms",
+          "type": "USMALLINT"
+        },
+        {
+          "name": "accel_rms_mg",
+          "type": "USMALLINT"
+        },
+        {
+          "name": "accel_peak_x_mg",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "accel_peak_y_mg",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "accel_peak_z_mg",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "gyro_peak_dps",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "variance",
+          "type": "USMALLINT"
+        },
+        {
+          "name": "sample_count",
+          "type": "USMALLINT"
+        },
+        {
+          "name": "event_flags",
+          "type": "UTINYINT"
+        },
+        {
+          "name": "frame_flags",
+          "type": "USMALLINT"
+        }
+      ]
+    },
+    "obd": {
+      "columns": [
+        {
+          "name": "vehicle_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "content_root",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "boot_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "mono_ms",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "seq",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "observed_at",
+          "type": "TIMESTAMP"
+        },
+        {
+          "name": "speed_kph",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "rpm",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "throttle_pct",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "load_pct",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "coolant_c",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "intake_c",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "fuel_pressure_kpa",
+          "type": "INTEGER"
+        },
+        {
+          "name": "timing_advance_deg",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "pid_error_count",
+          "type": "UTINYINT"
+        },
+        {
+          "name": "pids_requested",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "pids_answered",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "poll_cadence_ms",
+          "type": "INTEGER"
+        },
+        {
+          "name": "frame_flags",
+          "type": "USMALLINT"
+        }
+      ]
+    },
+    "position": {
+      "columns": [
+        {
+          "name": "vehicle_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "content_root",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "boot_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "mono_ms",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "seq",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "observed_at",
+          "type": "TIMESTAMP"
+        },
+        {
+          "name": "lat",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "lon",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "alt_m",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "speed_mps",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "heading_deg",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "fix_type",
+          "type": "UTINYINT"
+        },
+        {
+          "name": "sats_used",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "sats_visible",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "hdop",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "h_acc_m",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "v_acc_m",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "utc_acc_ms",
+          "type": "INTEGER"
+        },
+        {
+          "name": "source_flags",
+          "type": "UTINYINT"
+        },
+        {
+          "name": "frame_flags",
+          "type": "USMALLINT"
+        }
+      ]
+    },
+    "status": {
+      "columns": [
+        {
+          "name": "vehicle_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "content_root",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "boot_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "mono_ms",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "seq",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "observed_at",
+          "type": "TIMESTAMP"
+        },
+        {
+          "name": "battery_mv",
+          "type": "INTEGER"
+        },
+        {
+          "name": "sd_write_errors",
+          "type": "INTEGER"
+        },
+        {
+          "name": "sd_free_mib",
+          "type": "INTEGER"
+        },
+        {
+          "name": "device_temp_c",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "rssi_dbm",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "ext_sensor1",
+          "type": "INTEGER"
+        },
+        {
+          "name": "ext_sensor2",
+          "type": "INTEGER"
+        },
+        {
+          "name": "health_state",
+          "type": "UTINYINT"
+        },
+        {
+          "name": "reboot_count",
+          "type": "UTINYINT"
+        }
+      ]
+    },
+    "time_obs": {
+      "columns": [
+        {
+          "name": "vehicle_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "content_root",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "boot_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "seq",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "mono_ms",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "utc_ms",
+          "type": "UBIGINT"
+        },
+        {
+          "name": "implied_basis_ms",
+          "type": "UBIGINT"
+        },
+        {
+          "name": "accuracy_ms",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "source",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "adopted",
+          "type": "BOOLEAN"
+        }
+      ]
+    },
+    "transition": {
+      "columns": [
+        {
+          "name": "vehicle_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "content_root",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "boot_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "mono_ms",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "seq",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "observed_at",
+          "type": "TIMESTAMP"
+        },
+        {
+          "name": "region",
+          "type": "UTINYINT"
+        },
+        {
+          "name": "from_state",
+          "type": "UTINYINT"
+        },
+        {
+          "name": "to_state",
+          "type": "UTINYINT"
+        },
+        {
+          "name": "trigger_event",
+          "type": "UTINYINT"
+        },
+        {
+          "name": "reason_code",
+          "type": "UTINYINT"
+        },
+        {
+          "name": "policy_version",
+          "type": "UTINYINT"
+        },
+        {
+          "name": "start_score",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "stop_score",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "wake_cause",
+          "type": "UINTEGER"
+        }
+      ]
+    },
+    "tune": {
+      "columns": [
+        {
+          "name": "vehicle_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "tune_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "tuned_at",
+          "type": "TIMESTAMP"
+        },
+        {
+          "name": "note",
+          "type": "VARCHAR"
+        }
+      ]
+    }
+  },
+  "views": {
+    "v_boost_curve": {
+      "columns": [
+        {
+          "name": "vehicle_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "boot_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "mono_ms",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "rpm",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "boost_psi",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "map_kpa",
+          "type": "USMALLINT"
+        },
+        {
+          "name": "baro_kpa",
+          "type": "UTINYINT"
+        },
+        {
+          "name": "boost_age_ms",
+          "type": "UINTEGER"
+        }
+      ]
+    },
+    "v_boot_start": {
+      "columns": [
+        {
+          "name": "vehicle_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "boot_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "started_at",
+          "type": "TIMESTAMP"
+        }
+      ]
+    },
+    "v_drive_summary": {
+      "columns": [
+        {
+          "name": "vehicle_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "boot_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "duration_s",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "max_speed_kph",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "max_rpm",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "obd_samples",
+          "type": "BIGINT"
+        },
+        {
+          "name": "gnss_samples",
+          "type": "BIGINT"
+        },
+        {
+          "name": "fix_samples",
+          "type": "BIGINT"
+        },
+        {
+          "name": "phone_samples",
+          "type": "BIGINT"
+        },
+        {
+          "name": "gap_count",
+          "type": "BIGINT"
+        },
+        {
+          "name": "gap_duration_ms",
+          "type": "HUGEINT"
+        },
+        {
+          "name": "max_gap_ms",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "warnings",
+          "type": "VARCHAR"
+        }
+      ]
+    },
+    "v_gnss_sources": {
+      "columns": [
+        {
+          "name": "vehicle_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "boot_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "mono_ms",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "internal_lat",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "internal_lon",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "internal_fix",
+          "type": "UTINYINT"
+        },
+        {
+          "name": "internal_hacc",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "internal_speed",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "phone_lat",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "phone_lon",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "phone_fix",
+          "type": "UTINYINT"
+        },
+        {
+          "name": "phone_hacc",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "phone_speed",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "time_offset_ms",
+          "type": "UINTEGER"
+        }
+      ]
+    },
+    "v_health_stats": {
+      "columns": [
+        {
+          "name": "vehicle_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "metric",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "recent_median",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "recent_n",
+          "type": "BIGINT"
+        },
+        {
+          "name": "baseline_median",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "baseline_n",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_observed_at",
+          "type": "TIMESTAMP"
+        },
+        {
+          "name": "tuned_at",
+          "type": "TIMESTAMP"
+        }
+      ]
+    },
+    "v_metric_samples": {
+      "columns": [
+        {
+          "name": "vehicle_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "boot_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "metric",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "value",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "started_at",
+          "type": "TIMESTAMP"
+        }
+      ]
+    },
+    "v_position_trusted": {
+      "columns": [
+        {
+          "name": "vehicle_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "content_root",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "boot_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "mono_ms",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "seq",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "observed_at",
+          "type": "TIMESTAMP"
+        },
+        {
+          "name": "lat",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "lon",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "alt_m",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "speed_mps",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "heading_deg",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "fix_type",
+          "type": "UTINYINT"
+        },
+        {
+          "name": "sats_used",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "sats_visible",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "hdop",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "h_acc_m",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "v_acc_m",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "utc_acc_ms",
+          "type": "INTEGER"
+        },
+        {
+          "name": "source_flags",
+          "type": "UTINYINT"
+        },
+        {
+          "name": "frame_flags",
+          "type": "USMALLINT"
+        },
+        {
+          "name": "trusted",
+          "type": "BOOLEAN"
+        }
+      ]
+    },
+    "v_pulls": {
+      "columns": [
+        {
+          "name": "vehicle_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "boot_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "start_ms",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "end_ms",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "duration_s",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "min_rpm",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "max_rpm",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "max_speed_kph",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "avg_load",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "obd_samples",
+          "type": "BIGINT"
+        },
+        {
+          "name": "peak_boost_psi",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "avg_lambda",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "avg_stft",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "avg_ltft",
+          "type": "DOUBLE"
+        }
+      ]
+    },
+    "v_reproducibility": {
+      "columns": [
+        {
+          "name": "vehicle_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "content_root",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "origin",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "decoder_ver",
+          "type": "INTEGER"
+        },
+        {
+          "name": "output_digest",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "reproduced",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "n_position",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "n_imu",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "n_obd",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "n_boost",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "n_status",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "n_transition",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "n_gap",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "warnings",
+          "type": "VARCHAR"
+        }
+      ]
+    },
+    "v_speed_agreement": {
+      "columns": [
+        {
+          "name": "vehicle_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "boot_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "mono_ms",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "obd_speed_kph",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "gnss_speed_kph",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "ratio",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "gnss_age_ms",
+          "type": "UINTEGER"
+        }
+      ]
+    },
+    "v_telemetry": {
+      "columns": [
+        {
+          "name": "vehicle_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "boot_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "mono_ms",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "observed_at",
+          "type": "TIMESTAMP"
+        },
+        {
+          "name": "speed_kph",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "rpm",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "throttle_pct",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "load_pct",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "coolant_c",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "intake_c",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "timing_advance_deg",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "boost_psi",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "map_kpa",
+          "type": "USMALLINT"
+        },
+        {
+          "name": "baro_kpa",
+          "type": "UTINYINT"
+        },
+        {
+          "name": "lambda_ratio",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "stft_pct",
+          "type": "TINYINT"
+        },
+        {
+          "name": "ltft_pct",
+          "type": "TINYINT"
+        },
+        {
+          "name": "maf_cgps",
+          "type": "USMALLINT"
+        },
+        {
+          "name": "boost_age_ms",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "gnss_speed_kph",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "lat",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "lon",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "fix_type",
+          "type": "UTINYINT"
+        },
+        {
+          "name": "gnss_age_ms",
+          "type": "UINTEGER"
+        }
+      ]
+    },
+    "v_trim_map": {
+      "columns": [
+        {
+          "name": "vehicle_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "boot_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "rpm_bin",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "load_bin",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "avg_stft",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "avg_ltft",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "samples",
+          "type": "BIGINT"
+        }
+      ]
+    },
+    "v_trip_leg": {
+      "columns": [
+        {
+          "name": "vehicle_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "started_at",
+          "type": "TIMESTAMP"
+        },
+        {
+          "name": "closed_at",
+          "type": "TIMESTAMP"
+        },
+        {
+          "name": "boot_id",
+          "type": "VARCHAR"
+        }
+      ]
+    },
+    "v_trip_period": {
+      "columns": [
+        {
+          "name": "vehicle_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "boot_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "started_at",
+          "type": "TIMESTAMP"
+        },
+        {
+          "name": "ended_at",
+          "type": "TIMESTAMP"
+        },
+        {
+          "name": "started_on",
+          "type": "DATE"
+        },
+        {
+          "name": "week_start",
+          "type": "DATE"
+        },
+        {
+          "name": "month_start",
+          "type": "DATE"
+        },
+        {
+          "name": "quarter_start",
+          "type": "DATE"
+        },
+        {
+          "name": "year_start",
+          "type": "DATE"
+        },
+        {
+          "name": "duration_ms",
+          "type": "BIGINT"
+        },
+        {
+          "name": "distance_m",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "max_obd_speed_kph",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "max_gnss_speed_kph",
+          "type": "DOUBLE"
+        }
+      ]
+    },
+    "v_trip_summary": {
+      "columns": [
+        {
+          "name": "vehicle_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "boot_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "device_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "trip_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "started_at",
+          "type": "TIMESTAMP"
+        },
+        {
+          "name": "ended_at",
+          "type": "TIMESTAMP"
+        },
+        {
+          "name": "duration_ms",
+          "type": "BIGINT"
+        },
+        {
+          "name": "driving_ms",
+          "type": "BIGINT"
+        },
+        {
+          "name": "leg_count",
+          "type": "BIGINT"
+        },
+        {
+          "name": "distance_m",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "max_gnss_speed_mps",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "max_obd_speed_kph",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "max_rpm",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "obd_samples",
+          "type": "BIGINT"
+        },
+        {
+          "name": "gnss_samples",
+          "type": "BIGINT"
+        },
+        {
+          "name": "fix_samples",
+          "type": "BIGINT"
+        },
+        {
+          "name": "boost_samples",
+          "type": "BIGINT"
+        },
+        {
+          "name": "gap_count",
+          "type": "BIGINT"
+        },
+        {
+          "name": "gap_duration_ms",
+          "type": "HUGEINT"
+        },
+        {
+          "name": "max_gap_ms",
+          "type": "UINTEGER"
+        },
+        {
+          "name": "bundle_ids",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "bundle_count",
+          "type": "BIGINT"
+        },
+        {
+          "name": "decoder_version",
+          "type": "INTEGER"
+        }
+      ]
+    },
+    "v_tune_effect": {
+      "columns": [
+        {
+          "name": "vehicle_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "tune_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "metric",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "before_median",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "after_median",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "before_n",
+          "type": "BIGINT"
+        },
+        {
+          "name": "after_n",
+          "type": "BIGINT"
+        }
+      ]
+    },
+    "v_vehicles": {
+      "columns": [
+        {
+          "name": "vehicle_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "bundles",
+          "type": "BIGINT"
+        },
+        {
+          "name": "boots",
+          "type": "BIGINT"
+        },
+        {
+          "name": "first_observed_at",
+          "type": "TIMESTAMP"
+        },
+        {
+          "name": "last_observed_at",
+          "type": "TIMESTAMP"
+        }
+      ]
+    }
+  },
+  "macros": {
+    "period_summary": {
+      "parameters": [
+        "from_day",
+        "to_day"
+      ],
+      "columns": [
+        {
+          "name": "vehicle_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "trips",
+          "type": "BIGINT"
+        },
+        {
+          "name": "duration_ms",
+          "type": "BIGINT"
+        },
+        {
+          "name": "distance_m",
+          "type": "DOUBLE"
+        },
+        {
+          "name": "max_obd_speed_kph",
+          "type": "SMALLINT"
+        },
+        {
+          "name": "max_gnss_speed_kph",
+          "type": "DOUBLE"
+        }
+      ]
+    }
+  }
+}
