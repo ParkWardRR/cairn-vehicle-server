@@ -14,22 +14,24 @@
 > - **Cairn #7 is closed as superseded.** Retiring the listener would mean building
 >   `uplink/v1` first ([server #21](https://github.com/ParkWardRR/cairn-vehicle-server/issues/21)).
 >
-> **The listener binds `127.0.0.1:8443`, not `:8443`.** See
-> [Switching transport](#switching-transport) — a wildcard bind cannot start on this host.
-> The current deployment is `deploy/deploy-v3.sh`; see also
-> [tailscale-deployment.md](tailscale-deployment.md).
+> **Amended again 2026-10-24.** Since 2026-10-14 the listener binds the host's **LAN
+> address** on 8443 — not the wildcard, which cannot start beside tailscaled, and no longer
+> loopback, which left the dongle's Wi-Fi with no port. Funnel forwards to that LAN address.
+> See [Switching transport](#switching-transport). The current deployment is
+> `deploy/deploy-v3.sh`; see also [tailscale-deployment.md](tailscale-deployment.md).
 
-What is actually running, and why each piece is where it is. Current as of
-2026-10-01, when the server first went up as a real service.
+What is actually running, and why each piece is where it is. First written 2026-10-01, when
+the server went up as a real service; the diagram is current as of 2026-10-24.
 
 ## The short version
 
 ```
-dongle over LTE ─► Tailscale Funnel :8443 ─► tailscaled ─┐
-dongle on the LAN ───────── (no route today) ────────────┤
-                                                         ▼
-                      mutual TLS, private CA ──► cairn-server 127.0.0.1:8443  (systemd, no proxy)
-browser ─── Let's Encrypt via Caddy ───────────► web UI :443                  (Caddy, DNS-01)
+dongle over LTE ─► Tailscale Funnel tcp 8443 (raw TCP) ─► tailscaled ─┐
+dongle on the LAN (Wi-Fi) ────────────────────────────────────────────┤
+cairn-push, from a card on a workstation ─────────────────────────────┤
+                                                                      ▼
+                      mutual TLS, private CA ──► cairn-server <lan-address>:8443  (systemd, no proxy)
+browser ─── Let's Encrypt via Caddy ───────────► web UI :443                      (Caddy, DNS-01)
 ```
 
 Two separate paths on purpose. The device path is deliberately not behind the
@@ -66,7 +68,9 @@ issues a 10-year root and 825-day leaves, entirely offline.
 Caddy is still the right tool for the browser-facing UI, and uses the house
 pattern there — Let's Encrypt over the Cloudflare DNS-01 challenge, so an
 internal hostname gets a publicly trusted certificate without being publicly
-reachable. See `deploy/caddy/Caddyfile`.
+reachable. The Caddyfile is not in this repository; the web dashboard keeps a
+`Caddyfile.example`. How Caddy itself is installed is covered under
+[Host services outside this repository](#host-services-outside-this-repository).
 
 ## The service
 
@@ -95,7 +99,7 @@ The startup line states the security posture, and is worth reading rather than
 assuming:
 
 ```
-cairn ingest starting addr=127.0.0.1:8443 tls=true client_auth=true \
+cairn ingest starting addr=<lan-address>:8443 tls=true client_auth=true \
   receipt_key_id=cde936abd43d9703 devices=1
 ```
 
@@ -138,24 +142,26 @@ The CA private key stays on the workstation. Only `ca.pem`, `server.pem` and
 Mutual TLS, the intended configuration:
 
 ```
-CAIRN_ARGS=-addr 127.0.0.1:8443 -data /var/lib/cairn -tls-cert /etc/cairn/certs/server.pem -tls-key /etc/cairn/certs/server-key.pem -tls-client-ca /etc/cairn/certs/ca.pem
+CAIRN_ARGS=-addr <lan-address>:8443 -data /var/lib/cairn -tls-cert /etc/cairn/certs/server.pem -tls-key /etc/cairn/certs/server-key.pem -tls-client-ca /etc/cairn/certs/ca.pem
 ```
 
-> **`-addr` must name loopback, not the wildcard `:8443`, on any host running
-> `tailscale serve --tcp 8443`** (fixed 2026-10-10). tailscaled listens on the tailnet
-> addresses for port 8443 and forwards to `tcp://localhost:8443`. It claims those addresses
-> the moment they are free, so a wildcard bind then fails
+> **`-addr` names the host's LAN address, never the wildcard `:8443`, on any host where
+> tailscaled forwards port 8443.** tailscaled listens on the tailnet addresses for 8443 and
+> claims them the moment they are free, so a wildcard bind fails
 > `listen tcp :8443: bind: address already in use` and systemd restarts the unit every five
 > seconds, for ever. **Anything that stops the server triggers it** — including
-> `deploy-v3.sh --snapshot`, which stops the unit for the copy. It took ingest down for about
-> two minutes before it was understood.
+> `deploy-v3.sh --snapshot`, which stops the unit for the copy. On 2026-10-10 it took ingest
+> down for about two minutes before it was understood.
 >
-> The cost is that there is **no LAN-reachable ingest port**: a device on the local network
-> cannot reach `:8443` any more. Nothing needs it today, because the Wi-Fi uplink is gated off
-> ([firmware #31](https://github.com/ParkWardRR/cairn-esp32-device-firmware/issues/31)) and
-> the phone relay uses the app listener on `:8444`. Re-enabling Wi-Fi means either binding the
-> LAN address and retargeting the serve, or teaching the server a second listener — `-addr`
-> takes one value.
+> The fix that day was to bind loopback, which cost the LAN its ingest port. When the dongle's
+> Wi-Fi uplink came back, on 2026-10-14, `-addr` moved to the LAN address — a specific address
+> does not collide with tailscaled's — and that silently left Funnel forwarding to
+> `localhost:8443`, where nothing listened any more: LTE uploads had nowhere to go until the
+> forward was retargeted on 2026-10-15. **Whenever `-addr` changes, retarget
+> Funnel to match** (see [tailscale-deployment.md](tailscale-deployment.md#the-device-ingress-on-funnel)),
+> with `tailscale funnel --bg --tcp 8443 tcp://<lan-address>:8443`. Do not use
+> `tailscale serve --tcp` for it: that silently turns Funnel off for the port. `-addr` takes
+> one value, so the LAN address is the one both paths share.
 
 Plaintext, for a device that cannot speak mutual TLS yet:
 
@@ -171,6 +177,30 @@ can use mutual TLS, and both require physical access to the hardware:
 Plaintext is not as alarming as it sounds, and is not an excuse either: a
 receipt's Ed25519 signature is what authorizes deleting data, not the transport.
 Plaintext changes who can read an upload, not whether a deletion is legitimate.
+
+## Pushing bundles from a card
+
+When the dongle cannot upload, its card can. `cmd/cairn-push` reads sealed bundle
+directories from a mounted SD card and drives the same offer, transfer and commit the
+firmware does, over mutual TLS, presenting the **device's** client certificate:
+
+```bash
+go run ./cmd/cairn-push -server https://cairn.example.lan:8443 \
+  -ca ca.pem -cert client.pem -key client-key.pem \
+  /Volumes/<card>/cairn/bundles/<bundle-id> [...]
+```
+
+Nothing about it is privileged: every bundle is still verified against the enrolled
+device key, its assignment and its counter, and one the server already holds is
+answered with the original receipt. The ledger records these as `wifi-direct`,
+because the listener cannot tell what carried a connection. `cairn-push` deletes
+nothing: the bundles stay on the card until the dongle offers them itself and is
+answered with the receipt the push already earned.
+
+It was used on 2026-10-23, when the dongle's Wi-Fi failed to authenticate to the
+access point and its LTE registration was denied: five bundles the server lacked
+were pushed this way, and all five decoded and reproduced. For a dongle within
+Bluetooth range, `cmd/cairn-phone` offloads over BLE from a Mac instead.
 
 ## The receipt key is a reflash-level dependency
 
@@ -228,20 +258,20 @@ and `cairn-tsdb`), so no synthetic bundle reaches the real store.
 
 ## Building
 
-`server/Makefile` detects the host CPU and selects `GOAMD64=v3`, worth +15.7% on
-segment scanning. It falls back to `v1` with a warning when AVX2, BMI2 and FMA
-are not all present, because a `v3` binary on an older CPU dies with SIGILL at
+The `Makefile` at the repository root detects the host CPU and selects `GOAMD64=v3`,
+worth +15.7% on segment scanning. It falls back to `v1` with a warning when AVX2, BMI2
+and FMA are not all present, because a `v3` binary on an older CPU dies with SIGILL at
 startup rather than reporting anything useful.
 
 ```bash
-cd server && make build     # ./bin/, then install to /usr/local/bin
+make build                  # ./bin/, then install to /usr/local/bin
 make bench-isa              # re-derive the v1-vs-v3 table
 ```
 
 To build on the host and install the binaries and systemd units in one step, use
 `deploy/deploy-v3.sh <user@host>` (it also builds `cairn-tsdb`, which needs cgo, and
-keeps the previous binaries as `<name>.prev`). The UI is deployed separately with
-`deploy/deploy-ui.sh`.
+keeps the previous binaries as `<name>.prev`). The UI is deployed separately, by the
+web dashboard repository's `deploy/deploy-ui.sh`.
 
 ## Is the stack healthy?
 
@@ -254,6 +284,28 @@ installs it with a systemd timer (`cairn-healthcheck.timer`, every 5 minutes), s
 that has quietly lost a link shows up in `systemctl --failed`, and runs it as the last step
 of every deploy. Tailnet sign-in needs no `tailscale serve` config: the UI asks `tailscaled`
 who owns the peer address behind Caddy (see the dashboard's `docs/auth.md`).
+
+## Host services outside this repository
+
+Some of what the stack depends on is set up by hand on the host, and each item below was
+found broken after a package upgrade, a reboot or a configuration change. Recorded
+2026-10-15:
+
+- **Caddy needs a build with the `caddy-dns/cloudflare` module.** The Caddyfile's
+  DNS-01 challenge uses it, and the distribution's packaged binary does not include it,
+  so a package upgrade that replaces the binary breaks certificate renewal. Install a
+  custom build beside the packaged one and point the packaged unit at it with a systemd
+  drop-in (`/etc/systemd/system/caddy.service.d/`, overriding `ExecStart`), so a package
+  upgrade cannot undo it. **Do not pass `--environ`** in that `ExecStart`: it prints the
+  whole environment at start, Cloudflare API token included, into the journal and the
+  system log. Never put a secret's value on a `sudo` command line either, since `sudo`
+  logs the command.
+- **The PostgreSQL pod** (used by `cairn-worker` and the CI decode-pipeline job, not by
+  the dashboard) and **the self-hosted CI runners** are rootless containers. Start them
+  from user systemd units with lingering enabled for that user, so they come back after a
+  reboot rather than waiting for someone to start them by hand.
+- **Funnel's 8443 forward** is tailscaled state, not a file here: check it after any
+  change to `-addr` (see [Switching transport](#switching-transport)).
 
 ## Enrolling a phone with a QR code
 

@@ -1,9 +1,12 @@
 # Tailscale deployment
 
-Remote access for the iOS app, with no public exposure. Read
+Remote access for the iOS app, with no public exposure, and one deliberately public
+ingress for the dongle's LTE uploads. Read
 [trust-model-v3.md](https://github.com/ParkWardRR/cairn-driving-log-selfhosted/blob/main/docs/trust-model-v3.md) §1 first: **Tailscale here is
 reachability, not authorization.** The app still needs its own enrolled
-identity, and the dongle never touches the Tailnet.
+identity. The dongle never joins the Tailnet: over LTE it reaches the device listener
+through Funnel as a stranger would, and is admitted only by its client certificate and
+signed manifests.
 
 All hostnames below are placeholders (`cairn-host`, `example-tailnet`). Real
 values belong in your own notes and the gitignored deployment env, not in this
@@ -18,20 +21,24 @@ iPhone ── LAN Wi-Fi ───────────► https://cairn.examp
                               └─► http://127.0.0.1:8445               (cairn-server, loopback listener)
 
 Dongle ── BLE ──► iPhone ──(either path above)──► relay endpoints on the app listener
+
+Dongle ── LAN Wi-Fi ───────────────────────────────► <lan-address>:8443  (cairn-server, device listener, mTLS)
+   └──── LTE ──► Funnel tcp 8443 (raw TCP, public) ──► tailscaled ──► <lan-address>:8443
 ```
 
 **Corrected 2026-10-10.** This said the dongle has no Wi-Fi and that the `:8443` device
 listener is unused — both were out of date. The dongle has Wi-Fi and LTE again
 ([front door #19](https://github.com/ParkWardRR/cairn-driving-log-selfhosted/issues/19)), and
-`:8443` is the path it actually uploads through: over LTE, via a **Funnel** ingress on this
-same host (`tcp://cairn.<tailnet>.ts.net:8443`, raw `--tcp` so mTLS survives end to end).
-The phone relay over BLE ([ble-offload.md](https://github.com/ParkWardRR/cairn-driving-log-selfhosted/blob/main/contracts/ble/v1/offload.md))
+`:8443` is the path it actually uploads through: over Wi-Fi on the LAN, and over LTE via a
+**Funnel** ingress on this same host (`tcp://cairn-host.<tailnet>.ts.net:8443`, raw `--tcp` so
+mTLS survives end to end). The phone relay over BLE ([ble-offload.md](https://github.com/ParkWardRR/cairn-driving-log-selfhosted/blob/main/contracts/ble/v1/offload.md))
 is one path of several, not a replacement, and Cairn #7 is closed as superseded.
 
-Two consequences worth knowing here: `cairn-server` must bind **`127.0.0.1:8443`** so it does
-not compete with tailscaled for the tailnet address, and because Funnel presents a raw TCP
-stream, **TLS runs on the ESP32 rather than in the cellular modem** — Funnel needs SNI to
-demultiplex.
+Two consequences worth knowing here: `cairn-server` must bind the host's **LAN address** on
+8443 (since 2026-10-14; it was loopback before), never the wildcard, so it does not compete
+with tailscaled for the tailnet addresses; and because Funnel presents a raw TCP stream,
+**TLS runs on the ESP32 rather than in the cellular modem** — Funnel needs SNI to
+demultiplex. See [The device ingress on Funnel](#the-device-ingress-on-funnel).
 
 The two app URLs are *one logical account* in the app, not two databases.
 
@@ -74,15 +81,49 @@ tailscale serve status        # confirm it is Serve, not Funnel
 (Check the flag syntax against the installed `tailscale` version; it has
 changed between releases.)
 
-- **Never** run `tailscale funnel` for Cairn. The app listener rejects any
-  request carrying the Funnel header as a backstop, but the control is not
-  turning it on. `tailscale serve status` must not show "Funnel on".
-- Do not publish the device listener (`:8443`), PostgreSQL, MQTT, `cairn-tsdb`
-  or any admin endpoint to the Tailnet. The dongle does not need it.
+- **Never** put the app listener behind Funnel. It rejects any request carrying
+  the Funnel header as a backstop, but the control is not turning it on.
+  `tailscale serve status` must not show Funnel for the app route; the only
+  Funnel entry is TCP 8443 ([below](#the-device-ingress-on-funnel)).
+- Do not publish PostgreSQL, MQTT, `cairn-tsdb`, the local API or any admin
+  endpoint to the Tailnet or through Funnel.
 - `-trust-tailscale-serve` makes Cairn honour the `Tailscale-User-Login` /
   `Tailscale-User-Name` headers that Serve injects, **only** when the TCP peer
   is loopback. From any other peer they are ignored, so a LAN client cannot
   spoof a Tailnet identity.
+
+## The device ingress on Funnel
+
+Only if the dongle uploads over LTE. A cellular modem is not on your Tailnet, so the
+device listener needs a public way in, and Funnel is it:
+
+```bash
+# cairn-server ... -addr <lan-address>:8443 -tls-client-ca ...
+sudo tailscale funnel --bg --tcp 8443 tcp://<lan-address>:8443
+tailscale funnel status       # tcp 8443 -> the address -addr names
+```
+
+- **Raw TCP, not TLS-terminated.** The handler reads the device's client
+  certificate off the connection, so anything that terminates TLS in front of
+  it (`--tls-terminated-tcp`, an HTTPS Serve, a proxy) dissolves mutual TLS. With
+  raw TCP the server certificate must carry the Funnel name in its SAN, and the
+  client must send SNI, because the shared Funnel edge demultiplexes on nothing
+  else.
+- **Target the address `-addr` binds.** Since 2026-10-14 that is the LAN address,
+  not `localhost`. The forward does not follow a change to `-addr`; on 2026-10-14
+  it was left pointing at a loopback port nothing listened on, and LTE uploads
+  failed until it was retargeted the next day.
+- **Change it with `tailscale funnel`, never `tailscale serve --tcp 8443`.** The
+  serve form replaces the entry and silently turns Funnel off for the port: the
+  forward still works from the Tailnet, and the dongle, which is not on it, is cut
+  off with no error on the host.
+- Never bind the server to the wildcard `:8443` on this host: tailscaled holds the
+  tailnet addresses on that port, and the unit crash-loops on
+  `address already in use` (see [deploying.md](deploying.md#switching-transport)).
+
+What it exposes is a TLS handshake that demands a certificate from the private CA,
+then signed manifests checked against enrolled device keys. A stranger reaching the
+port cannot upload, read or delete anything.
 
 ## ACL policy
 
@@ -123,6 +164,11 @@ curl -s https://cairn-host.example-tailnet.ts.net/v1/health       # 200, tiny JS
 # Unsigned API call must fail:
 curl -si https://cairn-host.example-tailnet.ts.net/v1/sync/pull   # 401
 # From the open internet (cellular, not on Tailnet): must not connect at all.
+
+# Only with the LTE ingress, from the open internet: the device listener's
+# certificate from the private CA, and nothing without a client certificate.
+openssl s_client -connect cairn-host.example-tailnet.ts.net:8443 \
+  -servername cairn-host.example-tailnet.ts.net </dev/null | grep -E 'subject|issuer'
 ```
 
 ## Reliability caveat
@@ -137,4 +183,5 @@ dependency for correctness.
 - Revoke a lost phone with `cairn-admin client revoke <id>`; it takes effect on
   the next request. Also remove it from the Tailnet.
 - Rotate the server's auth key and review the ACL when the set of devices
-  changes. Review `tailscale serve status` after any host change.
+  changes. Review `tailscale serve status` and `tailscale funnel status` after any
+  host change, and after any change to `cairn-server`'s `-addr`.

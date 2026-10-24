@@ -47,7 +47,7 @@ This repository is the server. The other parts are listed under [Related reposit
 
 ## Status at a glance
 
-Honest status, as of **2026-10-08**. "Deployed" is taken from the project's single
+Honest status, as of **2026-10-24** (server `main` at `88795b7`, pinned to `contracts-v0.8.0`). "Deployed" is taken from the project's single
 [roadmap](https://github.com/ParkWardRR/cairn-driving-log-selfhosted/blob/main/ROADMAP.md#where-cairn-is-today);
 this repository cannot verify a live host by itself.
 
@@ -57,7 +57,7 @@ this repository cannot verify a live host by itself.
 > (a device uplink endpoint and a sealed configuration service, then retiring the legacy `:8443`
 > listener), the
 > [module system's M3 remainder](https://github.com/ParkWardRR/cairn-driving-log-selfhosted/blob/main/ROADMAP.md#m1m7--the-module-system--in-progress)
-> (module views, `v_metric_samples`, named queries) and
+> (named queries; module views and a module-generated `v_metric_samples` landed on 2026-10-08) and
 > [Phase 30](https://github.com/ParkWardRR/cairn-driving-log-selfhosted/blob/main/ROADMAP.md#phase-30--insight-history-health-and-engine-aware-views--in-progress)
 > (a tune record, baselines and a health summary).
 
@@ -65,19 +65,19 @@ this repository cannot verify a live host by itself.
 |---|---|---|
 | Bundle intake: manifest-first, hash-addressed, resumable, receipts | **Shipped, tested, deployed** | Same rules on every path. Crash recovery and a firmware interop run are required CI jobs |
 | App API (`sync/v1`): signed requests, enrolment, push/pull, snapshot, bundle relay | **Shipped, host-tested, deployed** | The contract is **draft**: this server implements it, the iPhone app does not yet use all of it |
-| Device ingest over mutual TLS (`127.0.0.1:8443`) | **Shipped, deployed, and the production upload path** | The row below used to say "no dongle uses it", contradicting the row after it; corrected 2026-10-10. The dongle uploads through it over LTE, reaching it through a Tailscale Funnel ingress that terminates at tailscaled and forwards to loopback. **It binds loopback, not the wildcard** — see [deploying.md](docs/deploying.md#switching-transport). It is called legacy only because `uplink/v1` is meant to replace its endpoint shapes; front-door issue 7, which proposed deleting it, is closed as superseded |
+| Device ingest over mutual TLS (`:8443`) | **Shipped, deployed, and the production upload path** | The dongle uploads through it over Wi-Fi on the LAN, and over LTE through a raw-TCP Tailscale Funnel ingress, so mTLS runs end to end. **It binds the host's LAN address, not the wildcard and, since 2026-10-14, not loopback either**: loopback left Wi-Fi with no port, and a wildcard bind fights tailscaled for the tailnet addresses. Funnel forwards to that LAN address — see [deploying.md](docs/deploying.md#switching-transport). It is called legacy only because `uplink/v1` is meant to replace its endpoint shapes; front-door issue 7, which proposed deleting it, is closed as superseded |
 | Escrowed storage roots, counters, assignments, revocation | **Shipped, tested** | Crypto-shredding exists as a library call; **no command exposes it yet** |
-| `cairn-tsdb` analytical store (in-memory DuckDB) | **Shipped, deployed** | Rebuilt from the raw bundles on every start; refuses to serve if the rebuild does not reproduce |
+| `cairn-tsdb` analytical store (in-memory DuckDB) | **Shipped, deployed** | Rebuilt from the raw bundles on every start; refuses to serve if the rebuild does not reproduce. Since 2026-10-15 it also dates bundles the dongle signed with no UTC basis from the rest of their boot (27 repaired in production; [how](#dating-bundles-signed-with-no-utc-basis)) |
 | PostgreSQL/PostGIS decode (`cairn-worker`) | **Built and tested in CI; not installed by `deploy-v3.sh`** | No systemd unit is shipped. The dashboard reads `cairn-tsdb`, not PostgreSQL |
-| `store/v1` views, tune records, engine profiles, health summary, bundle paths | **Shipped, tested** | Store contract `store/v1.4` (`v_trip_leg` and trip-keyed summaries); the newest contracts tag carries `store/v1.3`, so `main` of the front door is one release ahead of any pin. See [below](#analytical-store-storev1) |
+| `store/v1` views, tune records, engine profiles, health summary, bundle paths | **Shipped, tested, deployed** | Store contract `store/v1.6`, carried by `contracts-v0.8.0`, which this server and every other consumer pin: `v_trip_leg` and trip-keyed summaries (v1.4), `max_gap_ms` (v1.5), and `v_position_trusted` (v1.6), which marks GNSS fixes the IMU or physics contradicts so trips no longer count them. See [below](#analytical-store-storev1) |
 | Real hardware, end to end | **Verified 2026-10-06, and real trips since** | The dongle, `cmd/cairn-phone` on macOS, this server's relay, `cairn-tsdb` and the dashboard talked to each other for the first time: nine bundles over BLE in 62 s, nine committed via `/v1/relay/bundles/*`, nine receipts signed, and the dongle verified each against the pinned key and pruned. The ledger records all nine as `offered → committed → receipt_issued → decode_queued`, `"path":"ble-relay"`. One `counter_gap` is in there (counter 8 skipped seven values past the high-water mark): logged, committed anyway, worth understanding. The firmware ran a dev-pairing build (Just Works, no MITM) — see the firmware README's "Pairing and access" caveat |
-| Trips the dongle uploaded **itself** | **Accepted, on the legacy listener** | Since 2026-10-07 the dongle delivers bundles over Wi-Fi mTLS and over LTE through a Tailscale Funnel ingress, and prunes on this server's receipts. It does so through the **legacy** `:8443` device listener, not through `uplink/v1` — so the listener cannot be retired until the replacement endpoint exists (server issue 21) |
+| Trips the dongle uploaded **itself** | **Accepted, on the legacy listener; both of the dongle's links found blocked on 2026-10-23** | From 2026-10-07 the dongle delivered bundles over Wi-Fi mTLS and over LTE through a Tailscale Funnel ingress, and pruned on this server's receipts — 85 bundles over Wi-Fi, the last on 2026-10-15. By 2026-10-23 both of its own links had stopped, for reasons outside this server: Wi-Fi fails to authenticate to the access point and the LTE network denies registration. On 2026-10-23 the five bundles the server lacked were read from the card on a workstation and pushed with [`cairn-push`](cmd/cairn-push) over the same mTLS listener, under the device's own certificate; all five decoded and reproduced. Everything goes through the **legacy** `:8443` listener, not `uplink/v1`, so it cannot be retired until the replacement endpoint exists (server issue 21) |
 | Device uplink endpoint (`uplink/v1`) | **Designed, not implemented** | The contract is draft with 15 vectors. Writing it is what lets `:8443` and the device certificates go away (server issue 21) |
-| Modules (`module/v1`): module-owned derived columns | **Shipped, tested** | `internal/modules` loads and validates a module set at runtime (`cairn-tsdb -modules`), resolves its requirements against the live catalogue and orders derivations topologically, refusing a cycle; `applyDerivations` runs them after the rows load and before the views. `boost` owns `boost.boost_psi`. A module set that will not load is **fatal**, because a module owns a column's definition. Module **views**, metrics and named queries are not implemented yet |
+| Modules (`module/v1`): module-owned derived columns | **Shipped, tested** | `internal/modules` loads and validates a module set at runtime (`cairn-tsdb -modules`), resolves its requirements against the live catalogue and orders derivations topologically, refusing a cycle; `applyDerivations` runs them after the rows load and before the views. `boost` owns `boost.boost_psi`. A module set that will not load is **fatal**, because a module owns a column's definition. Since 2026-10-08 the build also creates the **views** a module declares (only `CREATE VIEW`, never over an existing view) and renders `v_metric_samples` from the modules' **metrics** instead of a hard-coded list. Named queries are not implemented yet |
 | LTE digests (provisional trips, usage accounting) | **Planned** | Server issue 25 |
 | Sealed device configuration (Wi-Fi and LTE settings sent to the dongle) | **Planned** | Server issue 24 |
 | v2 to v3 data migration | **Planned** | Wanted by the owner (server issue 18). No migration code exists. [MIGRATION.md](MIGRATION.md) is about this repository's *history*, not about data |
-| Passkey sign-in | **Not in this repository, by design** | Passkeys and Tailnet identity are both supported by the [web dashboard](https://github.com/ParkWardRR/cairn-vehicle-web-dashboard/blob/main/docs/auth.md); see [Who can do what](#who-can-do-what-passkeys-and-tailnet-identity) |
+| Passkey sign-in | **Not in this repository, by design** | Passkeys and Tailnet identity are both supported by the [web dashboard](https://github.com/ParkWardRR/cairn-vehicle-web-dashboard/blob/main/docs/auth.md), which since 2026-10-14 also accepts a passphrase; see [Who can do what](#who-can-do-what-passkeys-and-tailnet-identity) |
 
 **Hardware constraint worth knowing.** There is exactly one real dongle, an ESP32 revision v1.0 part. ESP32 Secure Boot V2
 needs revision v3.0 or later, so it is **not available** on that unit, and no eFuse is burned without a spare unit — which
@@ -87,10 +87,11 @@ and reading what it uploads. It does **not** permit deleting anything, because a
 signed and the dongle verified. What protects the server from a stolen dongle is therefore revocation here, which takes
 effect on the next request. None of that changes how this server behaves.
 
-**One PKI fact that blocks work here.** The `Cairn Private CA` private key does not exist on the host or anywhere else, so
-no new device client certificate can be issued, and `server.pem`'s SAN covers the LAN name only. Regenerating the PKI is
-low risk — no client certificate was ever issued and the firmware pins no CA — and whatever replaces it needs both the LAN
-name and the Funnel name. Until then the cellular path depends on Funnel and TLS terminates on the ESP32.
+**The PKI was regenerated on 2026-10-07.** The original `Cairn Private CA` private key existed nowhere, so no device
+client certificate could ever have been issued. Its replacement is P-256 throughout; the CA key stays offline on the
+operator's workstation and was never copied to the host; the server certificate's SAN carries both the LAN name and the
+Funnel name; and the dongle holds a client certificate whose CommonName is its device id. The cellular path still
+depends on Funnel, which needs SNI, so TLS runs on the ESP32 rather than in the modem.
 
 ## What is in the box
 
@@ -107,8 +108,9 @@ name and the Funnel name. Until then the cellular path depends on Funnel and TLS
 | [`cmd/cairn-accept`](cmd/cairn-accept) | Acceptance checks for the app API against a **running** server: sync, snapshot and bundle relay |
 | [`cmd/mkvectors`](cmd/mkvectors) | Generates the `format/v3` conformance vectors and the `enrolment/v1` negative vectors (into the contracts) |
 | [`cmd/dump-schema`](cmd/dump-schema) | Starts the real store and writes its native schema as `store/v1`'s `schema.json` |
-| [`cmd/cairn-phone`](cmd/cairn-phone) | A macOS stand-in for the iPhone app: enrol, pull bundles over BLE, relay them. A reference for the app, not a product |
-| [`cmd/cairn-push`](cmd/cairn-push), [`cmd/cairn-syncdemo`](cmd/cairn-syncdemo) | **Legacy** tools for the mTLS device listener: push an SD card's bundles, and a synthetic sync used by the crash-recovery test |
+| [`cmd/cairn-phone`](cmd/cairn-phone) | A macOS stand-in for the iPhone app: enrol, offload bundles from the dongle over BLE, relay them, and send the time over `UTC_SYNC`. A reference for the app and a way to empty a dongle from a Mac, not a product |
+| [`cmd/cairn-push`](cmd/cairn-push) | Pushes sealed bundles from a mounted SD card to the `:8443` device listener over mutual TLS, presenting the device's own client certificate, through the same offer, transfer and commit the firmware uses. The way in when the dongle cannot upload: used on 2026-10-23, when its Wi-Fi and LTE were both blocked. The ledger records such bundles as `wifi-direct`, because the listener cannot tell what carried them |
+| [`cmd/cairn-syncdemo`](cmd/cairn-syncdemo) | A synthetic sync against the device listener, used by the crash-recovery test |
 | [`cmd/cairn-tsdb-demo`](cmd/cairn-tsdb-demo) | Serves an invented store over `cairn-tsdb`'s API so the dashboard can be run and photographed with no real data |
 
 [`format/`](format) is the reference implementation of the bundle format; [`deploy/`](deploy) holds the systemd units,
@@ -165,7 +167,7 @@ Three design rules explain most of the code:
 
 | Listener | Flag | Transport | Authentication | Audience and status |
 |---|---|---|---|---|
-| Device ingest | `-addr`, default `:8443` | TLS required (`-dev` allows plain HTTP); mutual TLS when `-tls-client-ca` is set | Client certificate whose CommonName must equal the manifest's device id, **plus** the manifest's Ed25519 signature | **Legacy.** Routes `/api/v2/health`, `/api/v2/server/receipt-key`, `/api/v2/bundles/*`, and `/api/v2/firmware/*` when `-firmware-dir` is set. No dongle has a network stack today. Always started |
+| Device ingest | `-addr`, default `:8443` | TLS required (`-dev` allows plain HTTP); mutual TLS when `-tls-client-ca` is set | Client certificate whose CommonName must equal the manifest's device id, **plus** the manifest's Ed25519 signature | **Legacy in name, production in fact.** Routes `/api/v2/health`, `/api/v2/server/receipt-key`, `/api/v2/bundles/*`, and `/api/v2/firmware/*` when `-firmware-dir` is set. The dongle over Wi-Fi and over LTE (through Funnel), and `cairn-push` from a card. Bind the host's LAN address, not `:8443`. Always started |
 | App API, LAN | `-app-addr`, conventionally `:8444` | TLS (1.2 minimum), no client certificate requested. Plain HTTP only on a loopback address | **Signed requests** from an enrolled app identity (P-256), or a one-hour bearer token for background transfers | The iPhone on your LAN |
 | App API, Tailnet | `-app-serve-addr`, e.g. `127.0.0.1:8445` | Plain HTTP, **loopback enforced at startup**. `tailscale serve` terminates TLS in front of it | The same signed requests. Optionally also a Tailscale identity (`-require-tailnet-identity`) | The iPhone over your Tailnet. The same API instance as the LAN listener: one sync log, one cursor, one set of clients |
 | Local API | `-app-local-addr`, e.g. `127.0.0.1:8446` | Plain HTTP, loopback enforced at startup | Reads: the loopback bind. Writes: a shared bearer token (`-app-local-token-file`). Refuses any request carrying Tailscale identity or Funnel headers | The web dashboard's server side: vehicle names, engine profiles, health summary, tune records. **Never point `tailscale serve` or a proxy at it** |
@@ -176,8 +178,11 @@ Why the app API is a separate listener and not a second route: the device listen
 TLS handshake. A phone has none, and over Tailscale it could not present one anyway, because `tailscale serve` terminates
 TLS on the host. So the app authenticates every request with a signature that is identical over the LAN and Tailnet paths.
 
-Remote access is **Tailscale only**: never Funnel (the app listener refuses requests that carry the Funnel header, but not
-enabling Funnel is the real control), and never port forwarding.
+Remote access is **Tailscale only**, and never port forwarding. The app listener is never behind Funnel (it refuses
+requests that carry the Funnel header, but not enabling Funnel for it is the real control). The one public ingress is a
+raw-TCP Funnel on port 8443 for the dongle's LTE uploads: it forwards bytes without terminating TLS, so the device's
+client certificate still reaches `cairn-server`, and nothing is accepted without it. See
+[tailscale-deployment.md](docs/tailscale-deployment.md#the-device-ingress-on-funnel).
 
 ### Who can do what: passkeys and Tailnet identity
 
@@ -185,9 +190,9 @@ The project supports **both** a passkey and Tailnet identity. They live in diffe
 
 | Layer | Passkey (WebAuthn) | Tailnet identity | Always required |
 |---|---|---|---|
-| Web dashboard ([auth docs](https://github.com/ParkWardRR/cairn-vehicle-web-dashboard/blob/main/docs/auth.md)) | Yes. The only identity that can be "fresh" for sensitive changes | Yes: an allowlisted Tailscale login, for reading and for saved places | A passkey session, an allowlisted Tailnet device, or the read-only service token |
+| Web dashboard ([auth docs](https://github.com/ParkWardRR/cairn-vehicle-web-dashboard/blob/main/docs/auth.md)) | Yes. Since 2026-10-14 a passphrase session is the other human sign-in, and either can be "fresh" for sensitive changes | Yes: an allowlisted Tailscale login, for reading and for saved places | A passkey or passphrase session, an allowlisted Tailnet device, or the read-only service token |
 | iPhone app against this server | Not applicable. The Secure Enclave P-256 key *is* the credential, bound to the phone | Optional extra gate: `-trust-tailscale-serve -require-tailnet-identity -tailnet-allow-login you@example.com`. Always recorded in the audit log | An enrolled, unrevoked app identity signing the request |
-| Web server calling this server's local API | The **web layer** demands a passkey used in the last five minutes before it calls a tune write route | n/a | The shared write token, held by the web layer |
+| Web server calling this server's local API | The **web layer** demands a fresh human sign-in (a passkey or passphrase used in the last five minutes) before it calls a write route | n/a | The shared write token, held by the web layer |
 
 What this repository does **not** do: it has no WebAuthn code, and it does not verify who the web layer says asked.
 `created_by` on a tune record is a label the web layer reported, not an identity this server verified. A Tailscale address
@@ -535,6 +540,28 @@ is loaded once, keyed on content root. The ordering key is `(vehicle_id, boot_id
 a column. If a build does not reproduce, `/healthz` is `503` and the process refuses to serve unless started with
 `-serve-unreproduced`.
 
+That key orders samples *within a boot*. A trip is an outing and can span several boots, and the monotonic clock
+restarts at each, so anything that orders or offsets samples across a trip must use `observed_at`, never `mono_ms`.
+
+### Dating bundles signed with no UTC basis
+
+A row's `observed_at` is the manifest's `utc_basis_ms` plus the frame's monotonic time, and the basis belongs to the
+boot, not the bundle. Firmware before `2d262f9` dropped it at every seal and only re-learned it from the next GNSS
+time observation, about two minutes later, so a bundle sealed sooner was signed with `utc_basis_ms = 0` and decoded
+to 1970: 12 of the 37 bundles in one boot of the 2026-10-14 evening drive, interleaved with dated ones.
+`internal/tsdb/basis.go` repairs this at build time, after the load and before the views, and only where the evidence
+is unambiguous:
+
+- only a bundle with no dated row at all, and only from the dated bundles of the same vehicle and boot;
+- only when at least two of those, and at least two thirds, agree on the boot's basis to within 5 s;
+- only for an undated bundle that sits between agreeing bundles in monotonic order (or within 10 minutes of the first
+  or last of them), with no disagreeing bundle's *driving* samples in that interval.
+
+The last rule exists because a `boot_id` is not always one clock: older firmware resumed a capture left open at
+power-off and kept writing the next boot's frames under the old id, so a boot can hold a bundle dated a day out.
+Where another clock runs, nothing near it is guessed at. The decoder's output and its reproducibility digest are
+untouched, and a rebuild repeats the repair. It dated 27 bundles in production (15 and 12 across two boots).
+
 DuckDB's memory is capped (`-memory`, default `2GB`; the shipped unit also sets `MemoryMax=3G`). Queries are single,
 read-only statements, run in a transaction that is always rolled back, with external access disabled.
 
@@ -543,14 +570,25 @@ read-only statements, run in a transaction that is always rolled back, with exte
 The dashboard reads the store, not the server's internals, and the store has a versioned contract:
 [`store/v1`](https://github.com/ParkWardRR/cairn-driving-log-selfhosted/tree/main/contracts/store/v1) (draft; the schema is machine-checked).
 
-- **Tables:** `bundles`, `position`, `imu`, `obd`, `boost`, `status`, `transition`, `gap`, and since `store/v1.1`, `tune`.
+- **Tables:** `bundles`, `position`, `imu`, `obd`, `boost`, `status`, `transition`, `gap`, since `store/v1.1` `tune`,
+  and since `store/v1.3` `time_obs` (wall-clock observations, one row per source per reading).
   `boost.pedal_pct` arrives with `store/v1.3`: accelerator pedal position, which is the driver's
   demand and not `obd.throttle_pct` (the throttle plate angle, which a drive-by-wire ECU does not
   take to 100% at wide-open throttle). `NULL` means not measured.
 - **Views:** `v_telemetry` (OBD anchored, with the latest boost and GNSS row attached **and how stale each is**),
-  `v_reproducibility`, `v_vehicles`, `v_drive_summary`, `v_trip_summary`, `v_trim_map`, `v_boost_curve`, `v_pulls`,
-  `v_speed_agreement`, `v_gnss_sources`, and since `v1.1`, `v_boot_start`, `v_metric_samples`, `v_tune_effect` and
-  `v_health_stats`, and since `v1.2`, `v_trip_period`.
+  `v_reproducibility`, `v_vehicles`, `v_drive_summary` (one row per boot), `v_trip_summary`, `v_trim_map`,
+  `v_boost_curve`, `v_pulls`, `v_speed_agreement`, `v_gnss_sources`, and since `v1.1`, `v_boot_start`,
+  `v_metric_samples`, `v_tune_effect` and `v_health_stats`, since `v1.2`, `v_trip_period`, since `v1.4`, `v_trip_leg`,
+  and since `v1.6`, `v_position_trusted`. Since `v1.4` a row of `v_trip_summary` is a **trip** — an outing, keyed
+  `trip_id` = `<vehicle_id>:<started_ms>` — not a boot; `v1.5` adds `max_gap_ms` to it and to `v_drive_summary`.
+- **Trusted fixes** (`v1.6`). `v_position_trusted` is every column of `position` plus `trusted`, which is false for a
+  GNSS fix the accelerometer or physics contradicts: a fix claiming 8 m/s or more while the IMU's RMS falls under
+  35 mg in any second within 3 s of it, or a speed change of more than 10 m/s² between fixes at most 2 s apart (both
+  fixes of such a pair, since the data cannot say which is wrong). The cause was the 2026-10-14 evening drive, which
+  ended in 37 fixes running 2.7 km at 33-49 m/s from a parked car — self-consistent, so no position-versus-speed
+  check could see them — drawing a spur, a phantom leg and the trip's maximum speed. The two rules catch all 37 and,
+  across the other stored drives, about a dozen fixes in 13,000. `v_trip_leg` and `v_trip_summary` read trusted
+  fixes only; `position` itself is untouched, so a consumer that wants the raw receiver still has it.
 - **Table macros** (parameterised queries; a view cannot take a parameter), since `v1.2`: `period_summary(from_day, to_day)`,
   per-vehicle trips, duration, distance and max speeds over a half-open UTC date range, called as
   `SELECT * FROM period_summary('2026-03-01', '2026-04-01')` over `POST /query`.
@@ -559,12 +597,12 @@ The dashboard reads the store, not the server's internals, and the store has a v
   `boot_id`.
 - **Endpoints:** `POST /query`, `GET /healthz`, `/capabilities`, `/status`, `/metrics`, `POST /reload`, and
   `GET /snapshot` (a Parquet archive, optionally `?vehicle=` and `?format=`).
-- `/healthz` reports the build and `store_contract` (`store/v1.4`), so a deploy check notices a release that dropped a view.
+- `/healthz` reports the build and `store_contract` (`store/v1.6`), so a deploy check notices a release that dropped a view.
   The build identity carries the **channel** as well as the version and commit, and a binary built from a
   modified tree reports `dev` whatever it was told to claim:
 
   ```json
-  {"build":{"version":"v0.1.0","commit":"fc86c630...","channel":"stable"},"status":"ok","store_contract":"store/v1.4"}
+  {"build":{"version":"v0.1.0","commit":"88795b7a...","channel":"stable"},"status":"ok","store_contract":"store/v1.6"}
   ```
   `/capabilities` lists the live catalogue with a schema fingerprint.
 
@@ -611,8 +649,9 @@ clock.
 
 **Bundle paths.** The listener that carries a bundle stamps its ledger entries, and the store reports it in `bundles.path`
 beside `size_bytes`, `duration_ms` (first offer to commit, pauses included) and `received_at`. Values: `ble-relay` (the phone
-relay, the path in use), `wifi-direct` (the legacy device listener) and `lte` (a defined value that **nothing produces
-yet**). A bundle the ledger has no record of (one read from a card, say) has no path; unknown is never reported as any path.
+relay), `wifi-direct` (anything through the `:8443` device listener: the dongle over Wi-Fi, the dongle over LTE through
+Funnel, and `cairn-push` from a card, which the listener cannot tell apart) and `lte` (a defined value that **nothing
+produces yet**). A bundle the ledger has no record of (one read from a card, say) has no path; unknown is never reported as any path.
 
 **The local API** serves these to the dashboard, on `-app-local-addr`:
 
@@ -768,10 +807,14 @@ placeholders (details and ACL policy in [docs/tailscale-deployment.md](docs/tail
 sudo tailscale up --advertise-tags=tag:cairn-server --ssh=false
 # cairn-server ... -app-addr :8444 -app-serve-addr 127.0.0.1:8445 -trust-tailscale-serve
 sudo tailscale serve --bg --https=443 http://127.0.0.1:8445
-tailscale serve status        # must say Serve, never Funnel
+# only if the dongle uploads over LTE: raw TCP to the device listener's LAN address
+sudo tailscale funnel --bg --tcp 8443 tcp://<lan-address>:8443
+tailscale serve status        # the app route must say Serve; Funnel only on tcp 8443
 ```
 
 Reach it at `https://cairn-host.<tailnet-name>.ts.net`, and allow only your phone to reach only the server tag with an ACL.
+Change the 8443 forward with `tailscale funnel`, never `tailscale serve --tcp`: the latter silently turns Funnel off for
+that port, and the dongle's LTE path goes with it.
 
 **Backups and retention.** What to back up, consistent with the code:
 
@@ -810,8 +853,8 @@ In this repository:
 
 | Document | What it covers | Caveat |
 |---|---|---|
-| [docs/deploying.md](docs/deploying.md) | Why the legacy ingest is not behind a proxy, the systemd service, certificates, switching transport, the receipt key, verifying, `cairn-accept`, building | Amended for the phone relay but still centred on the legacy mTLS path; mentions `server/` paths and a `deploy/caddy` file that do not exist in this repository |
-| [docs/tailscale-deployment.md](docs/tailscale-deployment.md) | Tailscale on the host, `tailscale serve` for the app listener only, ACL, Funnel never, verification | Current |
+| [docs/deploying.md](docs/deploying.md) | Why the device ingest is not behind a proxy, the systemd service, certificates, switching transport, pushing from a card, the receipt key, verifying, `cairn-accept`, building, host services outside this repository | Amended 2026-10-24 for the LAN bind, Funnel and Caddy; still centred on the mTLS device path |
+| [docs/tailscale-deployment.md](docs/tailscale-deployment.md) | Tailscale on the host, `tailscale serve` for the app listener, the raw-TCP Funnel for the device listener, ACL, verification | Current as of 2026-10-24 |
 | [docs/device-provisioning.md](docs/device-provisioning.md) | Enrolling and provisioning a dongle over USB, what is escrowed, residual risk, troubleshooting | Current for the sealed-blob flow; uses firmware-repository paths |
 | [docs/retention-and-backup.md](docs/retention-and-backup.md) | Device retention, server tiers, backup, restore, disaster recovery | Partly stale, see [Deploy](#deploy) |
 | [MIGRATION.md](MIGRATION.md) | Where this repository's history came from and what was rewritten | About repository history, not data migration |
