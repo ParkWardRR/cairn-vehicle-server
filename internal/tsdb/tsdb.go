@@ -186,6 +186,9 @@ func Build(ctx context.Context, snap *Snapshot, notes []string, opts Options) (*
 	if err := applyVehicleCorrections(ctx, sdb, opts.Corrections, &report); err != nil {
 		return fail(err)
 	}
+	if err := clearUnavailableOBDSpeed(ctx, sdb, &report); err != nil {
+		return fail(err)
+	}
 	// Before anything reads a time: the derivations and every view after them see the
 	// repaired dates. See basis.go.
 	if err := repairUndatedBundles(ctx, sdb, &report); err != nil {
