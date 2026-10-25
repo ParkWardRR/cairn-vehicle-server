@@ -80,7 +80,8 @@ func main() {
 	baud := flag.Int("baud", 115200, "baud rate")
 	reset := flag.Bool("reset", false, "reset the board first (RTS pulse): a provisioned device only listens for 60 s after boot")
 	admin := flag.String("admin-cmd", "", "shell prefix that runs cairn-admin on the server host (omit to skip server enrolment)")
-	vehicle := flag.String("vehicle", "", "vehicle ID (32 hex) to assign the device to")
+	vehicle := flag.String("vehicle", "", "vehicle ID (32 hex) to assign the device to (with --garage: the car it is in now)")
+	garage := flag.String("garage", "", "cars the dongle moves between, chosen by VIN: <vehicle>=<engine id>,... (e.g. ...=bmw-n20,...=bmw-b58)")
 	assignment := flag.String("assignment", "", "existing assignment ID (32 hex); created if omitted and --vehicle is given")
 	name := flag.String("name", "", "friendly device name for the server")
 	expectID := flag.String("expect-device-id", "", "abort unless the device reports this id (from an independent record)")
@@ -93,7 +94,15 @@ func main() {
 		fatal("--port is required")
 	}
 
-	p := Plan{AdminCmd: *admin, Vehicle: strings.ToLower(*vehicle), Assignment: strings.ToLower(*assignment),
+	var cars []GarageCar
+	if *garage != "" {
+		var err error
+		if cars, err = ParseGarage(*garage); err != nil {
+			fatal("%v", err)
+		}
+	}
+
+	p := Plan{AdminCmd: *admin, Garage: cars, Vehicle: strings.ToLower(*vehicle), Assignment: strings.ToLower(*assignment),
 		Name: *name, ExpectDeviceID: *expectID, ExpectFingerprint: *expectFP,
 		Log: func(f string, a ...any) { fmt.Printf("  "+f+"\n", a...) }}
 

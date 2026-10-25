@@ -24,6 +24,13 @@ type Plan struct {
 	Vehicle    string // 32 hex; with no Assignment, one is created
 	Assignment string // 32 hex
 
+	// Garage is the cars the dongle moves between, each with the engine profile its
+	// VIN will name. Each gets an open assignment (cairn-admin assign --keep, which
+	// reuses one the device already holds), and the device is told all of them. With
+	// a garage, Vehicle (optional) is the car the dongle is in now and must be one of
+	// them: a plain assign would end the others.
+	Garage []GarageCar
+
 	Name string
 
 	// ExpectDeviceID and ExpectFingerprint, when set, must match what the device
@@ -40,6 +47,37 @@ type Plan struct {
 	// needs a few seconds to boot before it is listening.
 	BeginRetry time.Duration
 	Timeout    time.Duration // per reply
+}
+
+// GarageCar is one car of a garage.
+type GarageCar struct {
+	Vehicle    string // 32 hex
+	Engine     string // engine profile id, e.g. bmw-b58
+	Assignment string // filled in from the server
+}
+
+var engineID = regexp.MustCompile(`^[a-z0-9-]{1,23}$`)
+
+// ParseGarage reads "vehicle=engine,vehicle=engine".
+func ParseGarage(s string) ([]GarageCar, error) {
+	var out []GarageCar
+	for _, part := range strings.Split(s, ",") {
+		veh, eng, ok := strings.Cut(strings.TrimSpace(part), "=")
+		veh, eng = strings.ToLower(veh), strings.ToLower(eng)
+		if !ok || !hex32.MatchString(veh) || !engineID.MatchString(eng) {
+			return nil, fmt.Errorf("garage entry %q: want <vehicle 32 hex>=<engine id>", part)
+		}
+		for _, g := range out {
+			if g.Vehicle == veh {
+				return nil, fmt.Errorf("garage names vehicle %s twice", veh)
+			}
+		}
+		out = append(out, GarageCar{Vehicle: veh, Engine: eng})
+	}
+	if len(out) == 0 || len(out) > 4 {
+		return nil, fmt.Errorf("a garage holds 1 to 4 cars, got %d", len(out))
+	}
+	return out, nil
 }
 
 // Conn is a line-oriented console.
@@ -201,7 +239,28 @@ func Run(c Conn, p Plan) error {
 		}
 		p.Log("enrolled on the server; counter floor %d", floor)
 
+		for i := range p.Garage {
+			g := &p.Garage[i]
+			out, err := runAdmin(p.AdminCmd, `assign --keep "$CAIRN_DEV" "$CAIRN_VEH"`,
+				map[string]string{"CAIRN_DEV": deviceID, "CAIRN_VEH": g.Vehicle})
+			if err != nil {
+				return fmt.Errorf("adding %s to the garage failed: %w", g.Vehicle, err)
+			}
+			m := regexp.MustCompile(`assignment ([0-9a-f]{32}):`).FindStringSubmatch(out)
+			if m == nil {
+				return fmt.Errorf("could not read the garage assignment id from: %s", strings.TrimSpace(out))
+			}
+			g.Assignment = m[1]
+			p.Log("garage slot %d: vehicle %s, engine %s, assignment %s", i, g.Vehicle, g.Engine, g.Assignment)
+			if g.Vehicle == p.Vehicle && p.Assignment == "" {
+				p.Assignment = g.Assignment
+			}
+		}
+
 		if p.Vehicle != "" && p.Assignment == "" {
+			if len(p.Garage) > 0 {
+				return fmt.Errorf("vehicle %s is not in the garage", p.Vehicle)
+			}
 			out, err := runAdmin(p.AdminCmd, `assign "$CAIRN_DEV" "$CAIRN_VEH"`,
 				map[string]string{"CAIRN_DEV": deviceID, "CAIRN_VEH": p.Vehicle})
 			if err != nil {
@@ -216,7 +275,16 @@ func Run(c Conn, p Plan) error {
 		}
 	}
 
-	// 5. install the assignment and counter floor on the device, then commit once.
+	// 5. install the garage, the assignment and the counter floor, then commit once.
+	for i, g := range p.Garage {
+		if !hex32.MatchString(g.Assignment) {
+			return fmt.Errorf("garage slot %d has no assignment (is --admin-cmd set?)", i)
+		}
+		line := fmt.Sprintf("SET garage %d %s %s %s", i, g.Vehicle, g.Assignment, g.Engine)
+		if err := cmd(c, p.Timeout, line, "garage"); err != nil {
+			return err
+		}
+	}
 	if p.Vehicle != "" && p.Assignment != "" {
 		if !hex32.MatchString(p.Vehicle) || !hex32.MatchString(p.Assignment) {
 			return errors.New("vehicle and assignment must be 32 lowercase hex characters")

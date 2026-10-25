@@ -749,7 +749,8 @@ build rather than being skipped.
 **`cairn-worker`:** `-dsn` and `-keystore-master` (required), `-data`, `-mqtt`, `-mqtt-prefix`, `-poll`, `-max-attempts`,
 `-once`, `-reprocess <content root>`, `-reprocess-all`, `-receipt-key`.
 
-**`cairn-admin`** (global `-data` and `-keystore-master`): `vehicle add|list|archive|reveal-vin`, `assign`, `unassign`,
+**`cairn-admin`** (global `-data` and `-keystore-master`): `vehicle add|list|archive|reveal-vin`, `assign` (`--keep` adds the
+car to the device's garage instead of moving it), `unassign`,
 `assignments`, `counters`, `device enroll|list`, `client invite|list|revoke`. **`cairn-ledger`:** a positional ledger
 directory with `-bundle`, `-device`, `-problems`, `-summary`, `-json`. **`cairn-verify`:** a positional card or bundle
 directory with `-device-key`, `-server-key`, `-root-key`, `-key-version`, `-json`, `-v`.

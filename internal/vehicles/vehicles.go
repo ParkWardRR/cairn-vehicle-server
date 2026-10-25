@@ -398,6 +398,35 @@ func (r *Registry) Assign(deviceID, vehicleID, assignedBy string) (*Assignment, 
 // characters), for restoring a registry and for tests whose synthetic bundles
 // carry a fixed one. An empty ID generates a fresh UUIDv7.
 func (r *Registry) AssignWithID(assignmentID, deviceID, vehicleID, assignedBy string) (*Assignment, error) {
+	return r.assign(assignmentID, deviceID, vehicleID, assignedBy, false)
+}
+
+// AddToGarage fits a device to one more vehicle without ending its other open
+// assignments: a dongle that moves between cars holds one open assignment per car (its
+// garage) and chooses between them by the VIN. Idempotent: when the device already holds
+// an open assignment to this vehicle, that one is returned.
+//
+// An open assignment is never superseded by another open one -- moving back to the
+// first car is the point -- so CheckBundle applies the counter-order test only to
+// assignments that have been ended.
+func (r *Registry) AddToGarage(assignmentID, deviceID, vehicleID, assignedBy string) (*Assignment, error) {
+	deviceID = strings.ToLower(deviceID)
+	var held *Assignment
+	r.store.View(func(d *document) {
+		for _, a := range d.Assignments {
+			if a.DeviceID == deviceID && a.Open() && strings.EqualFold(a.VehicleID, vehicleID) {
+				c := *a
+				held = &c
+			}
+		}
+	})
+	if held != nil {
+		return held, nil
+	}
+	return r.assign(assignmentID, deviceID, vehicleID, assignedBy, true)
+}
+
+func (r *Registry) assign(assignmentID, deviceID, vehicleID, assignedBy string, keep bool) (*Assignment, error) {
 	deviceID = strings.ToLower(deviceID)
 	assignmentID = strings.ToLower(assignmentID)
 	if assignmentID != "" {
@@ -434,7 +463,7 @@ func (r *Registry) AssignWithID(assignmentID, deviceID, vehicleID, assignedBy st
 
 		now := r.now()
 		for _, a := range d.Assignments {
-			if a.DeviceID == deviceID && a.Open() {
+			if !keep && a.DeviceID == deviceID && a.Open() {
 				a.EndsAt = now
 			}
 		}
@@ -477,7 +506,8 @@ func (r *Registry) Unassign(deviceID string) error {
 	})
 }
 
-// ActiveFor returns the device's open assignment, or nil when it has none.
+// ActiveFor returns the device's most recent open assignment, or nil when it has none.
+// A device with a garage holds several; Assignments lists them all.
 func (r *Registry) ActiveFor(deviceID string) *Assignment {
 	deviceID = strings.ToLower(deviceID)
 	var out *Assignment
@@ -546,8 +576,12 @@ func (r *Registry) CheckBundle(deviceID, vehicleID, assignmentID string, counter
 		}
 
 		// Superseded: a newer assignment of this device has already been seen
-		// at a counter below this bundle's.
+		// at a counter below this bundle's. Only once the claimed one has been ended:
+		// open assignments are a garage, and a device moves between them.
 		for _, a := range d.Assignments {
+			if claimed.Open() {
+				break
+			}
 			if a.DeviceID == deviceID && a.Seq > claimed.Seq &&
 				a.FirstCounter != 0 && counter > a.FirstCounter {
 				verr = fmt.Errorf("%w: assignment #%d was in use at counter %d, this bundle is counter %d under #%d",

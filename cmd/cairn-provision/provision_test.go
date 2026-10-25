@@ -260,3 +260,58 @@ func TestSilentDeviceTimesOutWithAHelpfulMessage(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// The owner's two cars: each gets an open assignment with --keep, the device is told
+// both, and the one it is in now is the assignment it starts from. No plain assign is
+// issued, which would end the other car's.
+func TestGarageAddsEachCarAndInstallsAll(t *testing.T) {
+	dir := t.TempDir()
+	record := filepath.Join(dir, "calls.log")
+	script := filepath.Join(dir, "cairn-admin")
+	// --keep echoes the vehicle id back as the assignment id, so each car's is distinct.
+	body := fmt.Sprintf(`#!/bin/sh
+echo "$@" >> %q
+case "$1" in
+  device) echo "device_id %s"; echo "fingerprint %s"; echo "counter_floor 3";;
+  assign) [ "$2" = "--keep" ] && echo "assignment $4: device $3 -> vehicle $4 (#2)";;
+esac
+`, record, devID, devFP)
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const n20, b58 = "01a10dad2a2f797e976089f8854953f0", "01a10dad2a427a7eb5866efbf8bf40ab"
+	cars, err := ParseGarage(n20 + "=bmw-n20, " + strings.ToUpper(b58) + "=bmw-b58")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	conn, dev := newPair("", 0)
+	p := basePlan(script)
+	p.Vehicle, p.Garage = b58, cars
+	if err := Run(conn, p); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(dev.lines(), "\n")
+	for _, must := range []string{
+		"SET garage 0 " + n20 + " " + n20 + " bmw-n20",
+		"SET garage 1 " + b58 + " " + b58 + " bmw-b58",
+		"SET assignment " + b58 + " " + b58,
+	} {
+		if !strings.Contains(joined, must) {
+			t.Fatalf("the device never received %q; got:\n%s", must, joined)
+		}
+	}
+	rec, _ := os.ReadFile(record)
+	for _, l := range strings.Split(strings.TrimSpace(string(rec)), "\n") {
+		if strings.HasPrefix(l, "assign ") && !strings.HasPrefix(l, "assign --keep ") {
+			t.Fatalf("a plain assign would end the other car's assignment: %q", l)
+		}
+	}
+
+	for _, bad := range []string{"", "x=bmw-b58", n20 + "=BMW B58", n20 + "=bmw-n20," + n20 + "=bmw-b58",
+		strings.Repeat(n20+"=bmw-n20,", 4) + b58 + "=bmw-b58"} {
+		if _, err := ParseGarage(bad); err == nil {
+			t.Errorf("ParseGarage(%q) accepted", bad)
+		}
+	}
+}

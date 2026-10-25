@@ -58,7 +58,7 @@ func usage() {
   vehicle list
   vehicle archive <id>
   vehicle reveal-vin <id>
-  assign [--assignment-id HEX] <device-id> <vehicle-id>
+  assign [--assignment-id HEX] [--keep] <device-id> <vehicle-id>   (--keep: add to the device's garage)
   unassign <device-id>
   assignments [device-id]
   counters <device-id>
@@ -167,14 +167,28 @@ func assignCmd(reg *vehicles.Registry, args []string) error {
 	case "assign":
 		// --assignment-id pins the assignment's ID (restore and test fixtures only;
 		// normally it is generated).
-		pinned := ""
-		if len(args) >= 3 && args[1] == "--assignment-id" {
-			pinned, args = args[2], append([]string{args[0]}, args[3:]...)
+		//
+		// --keep adds the vehicle to the device's garage instead of moving the device:
+		// its other open assignments stay open, and an open assignment to this vehicle
+		// is reused rather than duplicated.
+		pinned, keep := "", false
+		for len(args) >= 2 {
+			if len(args) >= 3 && args[1] == "--assignment-id" {
+				pinned, args = args[2], append([]string{args[0]}, args[3:]...)
+			} else if args[1] == "--keep" {
+				keep, args = true, append([]string{args[0]}, args[2:]...)
+			} else {
+				break
+			}
 		}
 		if len(args) != 3 {
-			return errors.New("assign [--assignment-id HEX] <device-id> <vehicle-id>")
+			return errors.New("assign [--assignment-id HEX] [--keep] <device-id> <vehicle-id>")
 		}
-		a, err := reg.AssignWithID(pinned, args[1], args[2], "cairn-admin")
+		assign := reg.AssignWithID
+		if keep {
+			assign = reg.AddToGarage
+		}
+		a, err := assign(pinned, args[1], args[2], "cairn-admin")
 		if err != nil {
 			return err
 		}

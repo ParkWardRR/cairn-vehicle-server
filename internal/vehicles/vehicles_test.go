@@ -267,3 +267,71 @@ func TestNewIDIsUUIDv7AndSorts(t *testing.T) {
 		t.Fatalf("not a UUIDv7: %x", a)
 	}
 }
+
+// One dongle, two cars: the 428i and the M240i each hold an open assignment for it,
+// and it moves between them as often as it is moved. Neither supersedes the other.
+func TestGarageMovesBackAndForth(t *testing.T) {
+	r, _ := open(t)
+	n20, b58 := twoCars(t, r)
+
+	a428, err := r.AddToGarage("", deviceA, n20.ID, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	aM240, err := r.AddToGarage("", deviceA, b58.ID, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := r.AddToGarage("", deviceA, b58.ID, "test")
+	if err != nil || again.ID != aM240.ID {
+		t.Fatalf("adding a car the garage holds: %v, %v; want the same assignment back", again, err)
+	}
+	openCount := 0
+	for _, a := range r.Assignments(deviceA) {
+		if a.Open() {
+			openCount++
+		}
+	}
+	if openCount != 2 {
+		t.Fatalf("%d open assignments, want 2 (one per car)", openCount)
+	}
+
+	steps := []struct {
+		veh, asg string
+		counter  uint64
+	}{
+		{n20.ID, a428.ID, 10}, {b58.ID, aM240.ID, 11}, {n20.ID, a428.ID, 12}, {b58.ID, aM240.ID, 13},
+	}
+	for _, s := range steps {
+		if err := r.CheckBundle(deviceA, s.veh, s.asg, s.counter); err != nil {
+			t.Fatalf("counter %d under %s: %v", s.counter, s.asg, err)
+		}
+		if err := r.Observe(s.asg, s.counter); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Moving the device for good (no --keep) ends the garage; then the old rule holds.
+	moved, err := r.Assign(deviceA, b58.ID, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Observe(moved.ID, 20); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CheckBundle(deviceA, n20.ID, a428.ID, 21); !errors.Is(err, ErrAssignmentSuperseded) {
+		t.Fatalf("an ended garage assignment after the move: err = %v, want ErrAssignmentSuperseded", err)
+	}
+}
+
+// A car in one dongle's garage is still that dongle's: another cannot add it.
+func TestGarageKeepsOneRecorderPerVehicle(t *testing.T) {
+	r, _ := open(t)
+	n20, _ := twoCars(t, r)
+	if _, err := r.AddToGarage("", deviceA, n20.ID, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.AddToGarage("", strings.Repeat("b", 32), n20.ID, "test"); !errors.Is(err, ErrVehicleBusy) {
+		t.Fatalf("second device took a garage car: %v", err)
+	}
+}

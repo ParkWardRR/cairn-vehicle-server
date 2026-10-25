@@ -186,6 +186,9 @@ func Build(ctx context.Context, snap *Snapshot, notes []string, opts Options) (*
 	if err := applyVehicleCorrections(ctx, sdb, opts.Corrections, &report); err != nil {
 		return fail(err)
 	}
+	if err := fileMixedBootsUnderTheLastCar(ctx, sdb, &report); err != nil {
+		return fail(err)
+	}
 	if err := clearUnavailableOBDSpeed(ctx, sdb, &report); err != nil {
 		return fail(err)
 	}

@@ -89,6 +89,31 @@ All values are placeholders. Run on the workstation the dongle is plugged into.
 5. **Pair the phone** (BLE passkey) and let the app offload; see
    [ble-offload.md](https://github.com/ParkWardRR/cairn-driving-log-selfhosted/blob/main/contracts/ble/v1/offload.md).
 
+### One dongle, several cars
+
+A dongle that moves between cars holds a **garage**: one open assignment per car, and the
+engine profile each car's VIN names. It boots assuming the car it was last in, and when the
+ECU gives its VIN it switches to the matching car and seals the open bundle (firmware
+`lib/cairn_garage`). Nothing needs doing when the dongle is moved.
+
+```sh
+cairn-provision --port /dev/cu.usbserial-<n> --reset \
+  --expect-device-id <32hex> --expect-fingerprint <8hex> \
+  --admin-cmd '<as above>' \
+  --garage <428i vehicle id>=bmw-n20,<M240i vehicle id>=bmw-b58 \
+  --vehicle <the car it is plugged into now>
+```
+
+Each car gets `cairn-admin assign --keep` (which reuses an open assignment the device
+already holds for it), then the device receives `SET garage <slot> <vehicle> <assignment>
+<engine>` for each. Open assignments never supersede each other; a plain `assign` (no
+`--keep`) still moves the device for good and ends them all. The engine id must be a profile
+the firmware carries (`engines/*.yaml`); two cars with the same engine are told apart once
+each VIN has been seen, and until then the dongle stays with the car it assumed rather than
+guess. The store files a boot whose bundles name two cars under the car identified last (the
+bundles sealed before the VIN arrived name the car assumed), so a whole drive lands under
+the right car.
+
 `cairn-admin device enroll` refuses, before writing anything: a blob whose
 signature does not verify, a fingerprint that does not match, a device id
 already enrolled with a **different** signing key (pass `--allow-key-change`

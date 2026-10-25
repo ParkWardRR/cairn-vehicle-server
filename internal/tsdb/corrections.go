@@ -163,3 +163,62 @@ func applyOne(ctx context.Context, tx *sql.Tx, c VehicleCorrection) (int64, erro
 	_, err := tx.ExecContext(ctx, "DROP TABLE correction_roots")
 	return n, err
 }
+
+// fileMixedBootsUnderTheLastCar files a boot whose bundles name more than one vehicle
+// under the vehicle of its latest bundle.
+//
+// A dongle with a garage (firmware lib/cairn_garage) boots assuming the car it was last
+// in and switches when the ECU gives its VIN, sealing the open bundle; the bundles sealed
+// before the VIN arrived name the car it assumed. Unplugging the dongle powers it off and
+// the OBD port is always powered, so one boot is one car, and the car identified last is
+// the car the whole boot was in. "Latest" is by the bundle's last monotonic time, which
+// within one boot is one clock.
+func fileMixedBootsUnderTheLastCar(ctx context.Context, sdb *sql.DB, report *Report) error {
+	setup := `
+		CREATE OR REPLACE TEMP TABLE boot_car AS
+		WITH b AS (
+			SELECT content_root, device_id, boot_id, vehicle_id FROM bundles
+			WHERE device_id IS NOT NULL AND boot_id IS NOT NULL
+		),
+		mixed AS (
+			SELECT device_id, boot_id FROM b GROUP BY 1, 2 HAVING count(DISTINCT vehicle_id) > 1
+		),
+		span AS (
+			SELECT content_root, max(mono_ms) AS hi FROM (
+				SELECT content_root, mono_ms FROM status
+				UNION ALL SELECT content_root, mono_ms FROM transition
+				UNION ALL SELECT content_root, mono_ms FROM obd
+				UNION ALL SELECT content_root, mono_ms FROM imu
+				UNION ALL SELECT content_root, mono_ms FROM position
+			) GROUP BY 1
+		),
+		last_car AS (
+			SELECT b.device_id, b.boot_id, arg_max(b.vehicle_id, s.hi) AS vehicle_id
+			FROM b JOIN mixed USING (device_id, boot_id) JOIN span s USING (content_root)
+			GROUP BY 1, 2
+		)
+		SELECT b.content_root, l.vehicle_id
+		FROM b JOIN last_car l USING (device_id, boot_id)
+		WHERE b.vehicle_id <> l.vehicle_id`
+	if _, err := sdb.ExecContext(ctx, setup); err != nil {
+		return fmt.Errorf("mixed boots: %w", err)
+	}
+	var bundles, boots int64
+	if err := sdb.QueryRowContext(ctx, `SELECT count(*), count(DISTINCT b.boot_id)
+		FROM boot_car c JOIN bundles b USING (content_root)`).Scan(&bundles, &boots); err != nil {
+		return fmt.Errorf("mixed boots: %w", err)
+	}
+	if bundles > 0 {
+		for _, t := range vehicleTables {
+			q := fmt.Sprintf(`UPDATE %[1]s SET vehicle_id = c.vehicle_id FROM boot_car c
+				WHERE %[1]s.content_root = c.content_root`, t)
+			if _, err := sdb.ExecContext(ctx, q); err != nil {
+				return fmt.Errorf("mixed boots %s: %w", t, err)
+			}
+		}
+		report.Notes = append(report.Notes, fmt.Sprintf(
+			"filed %d bundle(s) of %d boot(s) that named two cars under the car identified last in the boot", bundles, boots))
+	}
+	_, err := sdb.ExecContext(ctx, "DROP TABLE boot_car")
+	return err
+}

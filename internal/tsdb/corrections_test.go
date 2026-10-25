@@ -117,3 +117,50 @@ func TestReadCorrectionsRefusesWhatItCannotCheck(t *testing.T) {
 		}
 	}
 }
+
+// A garage dongle plugged into the M240i after the 428i: it boots assuming the 428i,
+// the VIN says M240i, it seals and carries on under the M240i. The whole boot is the
+// M240i's; a boot that never switched, and another device, are untouched.
+func TestMixedBootIsFiledUnderTheCarIdentifiedLast(t *testing.T) {
+	db := emptyDB(t)
+	exec := func(q string) {
+		t.Helper()
+		if _, err := db.db.Exec(q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	bundle := func(root, dev, veh, boot string, from, to int) {
+		exec(fmt.Sprintf(`INSERT INTO bundles (content_root, vehicle_id, device_id, boot_id) VALUES ('%s','%s','%s','%s')`, root, veh, dev, boot))
+		for s := from; s < to; s++ {
+			exec(fmt.Sprintf(`INSERT INTO status (vehicle_id, content_root, boot_id, mono_ms, seq) VALUES ('%s','%s','%s',%d,%d)`, veh, root, boot, s*1000, s))
+			exec(fmt.Sprintf(`INSERT INTO obd (vehicle_id, content_root, boot_id, mono_ms, seq, speed_kph) VALUES ('%s','%s','%s',%d,%d,30)`, veh, root, boot, s*1000, s))
+		}
+	}
+	bundle("m1", corrDev, corr428, corrBootA, 0, 20)   // assumed the 428i at boot
+	bundle("m2", corrDev, corrM240, corrBootA, 20, 90) // the VIN said M240i
+	bundle("m3", corrDev, corrM240, corrBootA, 90, 99)
+	bundle("p1", corrDev, corr428, corrBootB, 0, 50) // a 428i boot that never switched
+	bundle("o1", corrOther, corr428, corrBootA, 0, 5)
+	bundle("o2", corrOther, corr428, corrBootA, 5, 9)
+
+	report := &Report{}
+	if err := fileMixedBootsUnderTheLastCar(context.Background(), db.db, report); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"m1": corrM240, "m2": corrM240, "m3": corrM240, "p1": corr428, "o1": corr428, "o2": corr428}
+	for root, w := range want {
+		for _, table := range []string{"bundles", "status", "obd"} {
+			res, err := db.Query(context.Background(), fmt.Sprintf(
+				`SELECT string_agg(DISTINCT vehicle_id, ',') FROM %s WHERE content_root = '%s'`, table, root), 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, _ := res.Rows[0][0].(string); got != w {
+				t.Errorf("%s %s: vehicle %s, want %s", table, root, got, w)
+			}
+		}
+	}
+	if len(report.Notes) != 1 || !strings.Contains(report.Notes[0], "1 bundle(s) of 1 boot(s)") {
+		t.Errorf("notes = %q", report.Notes)
+	}
+}
