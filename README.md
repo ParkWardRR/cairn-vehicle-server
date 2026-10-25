@@ -445,6 +445,7 @@ re-uploading a byte.
 | `offers/`, `outbox/` | In-flight offers; the decode queue | Disposable once receipted and decoded |
 | `ledger/` | Daily lifecycle files, one JSON line per transition | `cairn-ledger` reads it |
 | `devices.json`, `vehicles.json`, `counters.json`, `clients.json` | Registries | JSON, so intake survives a database outage |
+| `vehicle-corrections.json` | Optional: boots filed under a different vehicle than they were signed for | Read by `cairn-tsdb` at build; restart it after editing |
 | `keystore.json` | Wrapped storage roots | Useless without the master key |
 | `keys/` | `receipt.seed`, `enroll.x25519` (wrapped), `vehicles.key` (seals VINs) | `receipt.seed` is a reflash-level secret |
 | `sync/`, `audit/`, `instance.id` | The app API's sync log (single writer), audit files, the server's stable id | |
@@ -728,9 +729,22 @@ passed as a credential. Every path and host below is a placeholder.
 | `-app-local-token-file FILE` | Write token for the local API |
 | `-print-enroll-key`, `-print-receipt-key`, `-list-devices`, `-revoke ID` (`-revoke-reason`), `-enroll ID` (`-enroll-key`, `-enroll-root`, `-enroll-key-version`, `-enroll-name`) | Run-and-exit modes. Prefer `cairn-admin device enroll`: `-enroll` takes the raw root on the command line |
 
-**`cairn-tsdb`:** `-keystore` and `-keystore-master` (both required), `-data`, `-sd`, `-vehicles`, `-addr`, `-memory`,
-`-scratch`, `-watch`, `-tls-cert`, `-tls-key`, `-tls-client-ca`, `-serve-unreproduced`, and the one-shot `-verify`, `-query`
-and `-snapshot`. At least one of `-data` and `-sd` is needed.
+**`cairn-tsdb`:** `-keystore` and `-keystore-master` (both required), `-data`, `-sd`, `-vehicles`, `-corrections`, `-addr`,
+`-memory`, `-scratch`, `-watch`, `-tls-cert`, `-tls-key`, `-tls-client-ca`, `-serve-unreproduced`, and the one-shot `-verify`,
+`-query` and `-snapshot`. At least one of `-data` and `-sd` is needed.
+
+A dongle moved to another car before it was reassigned signs that car's drives for the old one. Reassign it
+(`cairn-admin assign`), then file the boots it recorded in the new car with `<data>/vehicle-corrections.json` (or
+`-corrections FILE`) and restart `cairn-tsdb`. Each entry names the device, the full boot ids, the vehicle the bundles must
+still claim and the one to file them under, with a reason; the bundles stay as signed, the store moves every row (trip ids
+follow, since they begin with the vehicle) and the build report notes each correction. A file that does not check stops the
+build rather than being skipped.
+
+```json
+{"corrections": [{"device_id": "8777…3e26", "boot_ids": ["9261cd5b…c40b"],
+  "from_vehicle_id": "01a1…53f0", "to_vehicle_id": "01a1…40ab",
+  "reason": "dongle moved to the M240i before reassignment", "by": "alfa", "at": "2026-10-25"}]}
+```
 
 **`cairn-worker`:** `-dsn` and `-keystore-master` (required), `-data`, `-mqtt`, `-mqtt-prefix`, `-poll`, `-max-attempts`,
 `-once`, `-reprocess <content root>`, `-reprocess-all`, `-receipt-key`.

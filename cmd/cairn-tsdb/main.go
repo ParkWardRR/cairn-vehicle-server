@@ -62,6 +62,10 @@ type config struct {
 	// owner's tune records. Empty means the store holds none.
 	vehiclesFile string
 
+	// correctionsFile files some boots under a different vehicle from the one their
+	// bundles were signed for. Empty means none.
+	correctionsFile string
+
 	// keys decrypts bundles. Built from -keystore and -keystore-master.
 	keys format.KeyProvider
 
@@ -93,6 +97,8 @@ func main() {
 		"module set directory; default CAIRN_MODULES, then ./modules, then ./.modules/modules")
 	flag.StringVar(&cfg.vehiclesFile, "vehicles", "",
 		"cairn-server's vehicles.json, read for tune records (default: <data>/vehicles.json when -data is set and it exists)")
+	flag.StringVar(&cfg.correctionsFile, "corrections", "",
+		"vehicle corrections file (default: <data>/vehicle-corrections.json when -data is set and it exists)")
 	keystorePath := flag.String("keystore", "", "escrowed storage-root file (required: bundles are encrypted)")
 	keystoreMaster := flag.String("keystore-master", "", "keystore master key file (required with -keystore)")
 	flag.Parse()
@@ -113,6 +119,12 @@ func main() {
 	if cfg.vehiclesFile == "" && cfg.dataDir != "" {
 		if def := filepath.Join(cfg.dataDir, "vehicles.json"); fileExists(def) {
 			cfg.vehiclesFile = def
+		}
+	}
+
+	if cfg.correctionsFile == "" && cfg.dataDir != "" {
+		if def := filepath.Join(cfg.dataDir, "vehicle-corrections.json"); fileExists(def) {
+			cfg.correctionsFile = def
 		}
 	}
 
@@ -272,8 +284,18 @@ func build(ctx context.Context, cfg config) (*tsdb.DB, error) {
 		notes = append(notes, "modules: "+modules.IdentityString(mods))
 	}
 
+	// Fatal like the module set, and for the same reason: starting without a correction
+	// the owner wrote would quietly put a car's drives back under the wrong car.
+	var corrections []tsdb.VehicleCorrection
+	if cfg.correctionsFile != "" {
+		if corrections, err = tsdb.ReadCorrections(cfg.correctionsFile); err != nil {
+			return nil, fmt.Errorf("vehicle corrections: %w", err)
+		}
+	}
+
 	return tsdb.Build(ctx, snap, notes, tsdb.Options{
 		MemoryLimit: cfg.memory, Keys: cfg.keys, Tunes: tunes, Modules: mods,
+		Corrections: corrections,
 	})
 }
 

@@ -55,6 +55,11 @@ type Options struct {
 	// Optional: with none, every grandfathered column keeps the value the decode path
 	// computed, which is what every deployment had before modules existed.
 	Modules []*modules.Module
+
+	// Corrections file some boots' bundles under a different vehicle from the one they
+	// were signed for (a dongle moved between cars before it was reassigned). Optional.
+	// See corrections.go.
+	Corrections []VehicleCorrection
 }
 
 // TuneRow is one tune record as the store holds it. The vehicle registry is where tunes
@@ -175,6 +180,10 @@ func Build(ctx context.Context, snap *Snapshot, notes []string, opts Options) (*
 		return fail(err)
 	}
 	if err := reconcile(ctx, sdb, loaded, &report); err != nil {
+		return fail(err)
+	}
+	// Before anything reads a vehicle or a time. See corrections.go.
+	if err := applyVehicleCorrections(ctx, sdb, opts.Corrections, &report); err != nil {
 		return fail(err)
 	}
 	// Before anything reads a time: the derivations and every view after them see the
