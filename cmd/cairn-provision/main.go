@@ -123,16 +123,26 @@ func main() {
 		time.Sleep(120 * time.Millisecond)
 		_ = sp.SetRTS(false)
 		fmt.Println("reset sent")
-		if *monitor == 0 {
-			fmt.Println("waiting for the device to boot")
-			time.Sleep(2500 * time.Millisecond)
+	}
+
+	c := &serialConn{port: sp, r: bufio.NewReader(sp)}
+
+	if *reset && *monitor == 0 {
+		// The console reads lines only once the capture loop runs, ~14 s after reset on
+		// firmware that brings up BLE, the modem and the SD card first. Lines sent before
+		// that were lost or arrived garbled ("ERR unknown command" for GET enroll_blob),
+		// so wait for the loop rather than a fixed delay. The provisioning window is 60 s.
+		fmt.Println("waiting for the device to boot")
+		if waitForBoot(c, 30*time.Second) {
+			time.Sleep(500 * time.Millisecond)
+		} else {
+			fmt.Println("no boot line seen; trying anyway")
 		}
 	}
 	if *monitor == 0 {
 		_ = sp.ResetInputBuffer() // monitoring wants the boot lines, provisioning does not
+		c.r.Reset(sp)
 	}
-
-	c := &serialConn{port: sp, r: bufio.NewReader(sp)}
 
 	if *monitor > 0 {
 		// The device never writes a credential to its console, so this is safe to
@@ -159,4 +169,19 @@ func main() {
 		fatal("%v", err)
 	}
 	fmt.Println("done")
+}
+
+// waitForBoot reads the console until the device reports its capture loop running.
+func waitForBoot(c *serialConn, within time.Duration) bool {
+	end := time.Now().Add(within)
+	for time.Now().Before(end) {
+		line, err := c.ReadLine(end)
+		if err != nil {
+			return false
+		}
+		if strings.Contains(line, "capture loop running") {
+			return true
+		}
+	}
+	return false
 }
