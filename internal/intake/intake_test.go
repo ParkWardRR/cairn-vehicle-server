@@ -712,6 +712,41 @@ func TestOfferAfterCommitReturnsReceiptWithoutRequestingChunks(t *testing.T) {
 	}
 }
 
+// A device re-offering a bundle committed long ago -- its offer record already swept --
+// must be able to Commit and get the receipt, not ErrUnknownBundle. Measured
+// 2026-10-24: three bundles from 2026-10-14 offered again over LTE were answered
+// "already held" and then refused with 404 at Commit, so the dongle kept them forever.
+func TestCommitAfterSweptOfferReturnsTheReceipt(t *testing.T) {
+	h := newHarness(t)
+	b := h.buildBundle(t, 256, nil)
+	if _, err := h.svc.Offer(b.ManifestBytes, b.Signature); err != nil {
+		t.Fatal(err)
+	}
+	h.sendAll(t, b)
+	committed, err := h.svc.Commit(b.Manifest.BundleID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, err := h.svc.SweepOffers(0); err != nil || n != 1 {
+		t.Fatalf("sweep reclaimed %d record(s), err %v; want the committed bundle's", n, err)
+	}
+
+	offer, err := h.svc.Offer(b.ManifestBytes, b.Signature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if offer.ExistingReceipt == nil {
+		t.Fatal("the re-offer did not report the existing receipt")
+	}
+	again, err := h.svc.Commit(b.Manifest.BundleID)
+	if err != nil {
+		t.Fatalf("Commit after a swept offer: %v", err)
+	}
+	if !again.AlreadyCommitted || again.Receipt.ReceiptID != committed.Receipt.ReceiptID {
+		t.Error("the Commit did not return the original receipt")
+	}
+}
+
 // ─── restart durability ─────────────────────────────────────────────────────
 
 // An offer must survive a restart mid-transfer, or a device that reboots during

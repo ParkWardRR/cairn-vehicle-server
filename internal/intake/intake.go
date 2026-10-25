@@ -250,6 +250,19 @@ func (s *Service) Offer(manifestBytes, signature []byte) (*OfferResult, error) {
 	// Idempotency on content_root: identical data earns the same receipt
 	// forever, no matter how the retry is framed.
 	if existing, encoded, err := s.receipts.Lookup(manifest.ContentRoot); err == nil {
+		// Leave an offer record behind, so the Commit the device sends next finds
+		// one and answers with this same receipt. Without it a duplicate offer
+		// was answered here and its Commit then failed with ErrUnknownBundle --
+		// HTTP 404 -- once SweepOffers had reclaimed the original record, and the
+		// firmware reads a 404 as "the server will never accept these bytes" and
+		// keeps the bundle forever. Measured 2026-10-24 over LTE: three bundles
+		// committed on 2026-10-14 refused this way, occupying three of the four
+		// slots in every upload session. Both objects are content-addressed, so
+		// storing them again costs nothing, and the record's fresh mtime keeps
+		// the sweep off it until the device has had its answer.
+		if err := s.rememberOffer(manifest, manifestBytes, signature); err != nil {
+			return nil, err
+		}
 		return &OfferResult{
 			BundleID:             manifest.BundleID,
 			ExistingReceipt:      existing,
@@ -271,15 +284,7 @@ func (s *Service) Offer(manifestBytes, signature []byte) (*OfferResult, error) {
 	// Persist the manifest and signature so a restart mid-transfer does not
 	// require the device to re-offer. Both are content-addressed, so this is
 	// also how the committed bundle will reference them.
-	manifestDigest := sha256.Sum256(manifestBytes)
-	if err := s.cas.Put(manifestDigest, manifestBytes); err != nil {
-		return nil, fmt.Errorf("store manifest: %w", err)
-	}
-	sigDigest := sha256.Sum256(signature)
-	if err := s.cas.Put(sigDigest, signature); err != nil {
-		return nil, fmt.Errorf("store manifest signature: %w", err)
-	}
-	if err := s.writeOffer(manifest.BundleID, manifestDigest, sigDigest); err != nil {
+	if err := s.rememberOffer(manifest, manifestBytes, signature); err != nil {
 		return nil, err
 	}
 
@@ -760,6 +765,20 @@ func (s *Service) writeOffer(bundleID [16]byte, manifestDigest, sigDigest [32]by
 		return fmt.Errorf("sync offer dir: %w", err)
 	}
 	return nil
+}
+
+// rememberOffer stores an offer's manifest and signature in the CAS and writes the
+// offer record that Commit and AcceptChunk look the bundle up by.
+func (s *Service) rememberOffer(manifest *format.Manifest, manifestBytes, signature []byte) error {
+	manifestDigest := sha256.Sum256(manifestBytes)
+	if err := s.cas.Put(manifestDigest, manifestBytes); err != nil {
+		return fmt.Errorf("store manifest: %w", err)
+	}
+	sigDigest := sha256.Sum256(signature)
+	if err := s.cas.Put(sigDigest, signature); err != nil {
+		return fmt.Errorf("store manifest signature: %w", err)
+	}
+	return s.writeOffer(manifest.BundleID, manifestDigest, sigDigest)
 }
 
 // SweepOffers removes offer records whose content root has already been
