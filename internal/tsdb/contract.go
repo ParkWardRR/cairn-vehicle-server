@@ -66,7 +66,7 @@ import (
 const StoreContract = "store/v1.7"
 
 // schemaFingerprint is the fingerprint of the schema StoreContract describes.
-const schemaFingerprint = "b58b96368a572cf410b8dd6a34546139ffa242f63f63d37524b5d21452440aa1"
+const schemaFingerprint = "38dba61c2ac586594c11c69a1ff9de9a9c17cd1282ad8c5c3635f38fbffb1be9"
 
 // Capabilities is what a running store offers: the objects present in its database.
 type Capabilities struct {

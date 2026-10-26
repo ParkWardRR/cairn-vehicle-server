@@ -49,7 +49,7 @@ func TestWifiAccessPointsAreLearnedAndPlaceUnfixedScans(t *testing.T) {
 	fix("B", 600000, 1, homeLat+0.0005, homeLon, 12)
 	scan("B", 601000, 3, 3, "88:dc:97:07:b8:db", "-90")
 
-	res, err := db.Query(context.Background(), `SELECT bssid, observations, spread_m FROM v_wifi_ap_learned ORDER BY bssid`, 0)
+	res, err := db.Query(context.Background(), `SELECT bssid, observations, spread_m FROM v_wifi_ap_learned WHERE vehicle_id = 'v' ORDER BY bssid`, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

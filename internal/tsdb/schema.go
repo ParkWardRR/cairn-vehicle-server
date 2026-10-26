@@ -398,7 +398,8 @@ FROM judged f
 LEFT JOIN imu_near i ON i.vehicle_id = f.vehicle_id AND i.boot_id = f.boot_id
     AND i.s = CAST(f.mono_ms // 1000 AS BIGINT);
 
--- Where each access point is, learned from the trusted GNSS fix beside each learning scan
+-- Where each access point is, per vehicle (a car's own sightings only, like every other
+-- object here), learned from the trusted GNSS fix beside each learning scan
 -- that heard it (no more than 2 s before it, under 20 m/s). Weighted by signal (10^(dBm/20),
 -- so the strong readings taken close to it dominate), with spread_m the RMS distance of
 -- its sightings from that centre. An access point needs two sightings; one seen over more
@@ -415,21 +416,21 @@ learn AS (
     WHERE s.flags & 1 = 1
 ),
 placed AS (
-    SELECT l.bssid, l.rssi_dbm, l.observed_at, f.lat, f.lon, pow(10, l.rssi_dbm / 20.0) AS w
+    SELECT l.vehicle_id, l.bssid, l.rssi_dbm, l.observed_at, f.lat, f.lon, pow(10, l.rssi_dbm / 20.0) AS w
     FROM learn l ASOF JOIN fixes f
       ON f.vehicle_id = l.vehicle_id AND f.boot_id = l.boot_id AND l.mono_ms >= f.mono_ms
     WHERE l.mono_ms - f.mono_ms <= 2000 AND coalesce(f.speed_mps, 0) < 20
 ),
 centre AS (
-    SELECT bssid, sum(lat * w) / sum(w) AS lat, sum(lon * w) / sum(w) AS lon, count(*) AS observations,
+    SELECT vehicle_id, bssid, sum(lat * w) / sum(w) AS lat, sum(lon * w) / sum(w) AS lon, count(*) AS observations,
            max(rssi_dbm) AS max_rssi_dbm, min(observed_at) AS first_seen, max(observed_at) AS last_seen
-    FROM placed GROUP BY bssid HAVING count(*) >= 2
+    FROM placed GROUP BY vehicle_id, bssid HAVING count(*) >= 2
 )
-SELECT c.bssid, c.lat, c.lon, c.observations,
+SELECT c.vehicle_id, c.bssid, c.lat, c.lon, c.observations,
        sqrt(avg(pow((p.lat - c.lat) * 111320.0, 2) + pow((p.lon - c.lon) * 111320.0 * cos(radians(c.lat)), 2))) AS spread_m,
        c.max_rssi_dbm, c.first_seen, c.last_seen
-FROM centre c JOIN placed p USING (bssid)
-GROUP BY c.bssid, c.lat, c.lon, c.observations, c.max_rssi_dbm, c.first_seen, c.last_seen
+FROM centre c JOIN placed p USING (vehicle_id, bssid)
+GROUP BY c.vehicle_id, c.bssid, c.lat, c.lon, c.observations, c.max_rssi_dbm, c.first_seen, c.last_seen
 HAVING sqrt(avg(pow((p.lat - c.lat) * 111320.0, 2) + pow((p.lon - c.lon) * 111320.0 * cos(radians(c.lat)), 2))) <= 300;
 
 -- Scans with no trusted GNSS fix within 5 s either side: the moments a Wi-Fi estimate is
@@ -462,7 +463,7 @@ est AS (
            sum(l.lon * pow(10, o.rssi_dbm / 20.0)) / sum(pow(10, o.rssi_dbm / 20.0)) AS est_lon,
            avg(l.spread_m) + 25 AS est_accuracy_m,
            CAST(count(*) AS INTEGER) AS est_aps
-    FROM wifi_ap_obs o JOIN v_wifi_ap_learned l USING (bssid)
+    FROM wifi_ap_obs o JOIN v_wifi_ap_learned l USING (vehicle_id, bssid)
     GROUP BY 1, 2, 3
 )
 SELECT u.vehicle_id, u.boot_id, u.mono_ms, u.seq, u.observed_at, u.ap_count,
