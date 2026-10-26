@@ -52,7 +52,7 @@ func buildFromSD(t *testing.T, sd string) *DB {
 	return db
 }
 
-// The pinned digests are the decoder's output at Version 3 (vehicle_id on every
+// The pinned digests are the decoder's output at Version 4 (Version 3 put vehicle_id on every
 // row) for these exact synthetic bundles. If one changes, the decoder changed
 // what it produces: that is either a bug, or a deliberate change, in which case
 // bump decode.Version and update the pins in the same commit so the shift is
@@ -67,13 +67,13 @@ func TestGoldenDigests(t *testing.T) {
 		{
 			name:   "default",
 			opts:   testbundle.Default(),
-			digest: "52072050d592b06961871a32c3de9ceb01603ffa5b05482b3734dd73dd424fe5",
+			digest: "ee4efc7b4328bf439f4ef9212578b10701ca13c7d811e9555283f4fd137ff340",
 			rows:   Counts{Position: 12, OBD: 7, Transition: 4},
 		},
 		{
 			name:   "gap-and-fixless",
 			opts:   testbundle.Options{ChunkSize: 256, GNSSSamples: 20, OBDSamples: 5, JournalEntries: 2, GapAfter: 8, FixlessFrom: 15},
-			digest: "affe5a8840e2c538c09c2333de228c22cf9b2279c29add9893c07101e8994a24",
+			digest: "048752d59ef3bf30e3ad1fc9e425a9ddb20f4a1d87f47b74380ae617dd975881",
 			rows:   Counts{Position: 15, OBD: 5, Transition: 2, Gap: 1},
 		},
 	}

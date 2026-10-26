@@ -51,6 +51,8 @@ var tablesWithTime = []struct{ table, column string }{
 	{"status", "observed_at"},
 	{"transition", "observed_at"},
 	{"gap", "started_at"},
+	{"wifi_scan", "observed_at"},
+	{"wifi_ap_obs", "observed_at"},
 }
 
 func repairUndatedBundles(ctx context.Context, sdb *sql.DB, report *Report) error {

@@ -322,6 +322,20 @@ type vectorExpectation struct {
 		} `json:"records"`
 	} `json:"obd_ext"`
 
+	Wifi *struct {
+		Records []struct {
+			MonotonicMS uint32 `json:"monotonic_ms"`
+			Learning    bool   `json:"learning"`
+			Active      bool   `json:"active"`
+			ScanMS      uint16 `json:"scan_ms"`
+			APs         []struct {
+				BSSID   string `json:"bssid"`
+				RSSIdBm int8   `json:"rssi_dbm"`
+				Channel uint8  `json:"channel"`
+			} `json:"aps"`
+		} `json:"records"`
+	} `json:"wifi_scan"`
+
 	TimeObs *struct {
 		Records []struct {
 			MonotonicMS    uint32  `json:"monotonic_ms"`
@@ -371,7 +385,7 @@ func TestConformanceVectors(t *testing.T) {
 
 		t.Run(e.Name(), func(t *testing.T) {
 			switch {
-			case exp.Events != nil, exp.Health != nil, exp.OBDExt != nil, exp.TimeObs != nil:
+			case exp.Events != nil, exp.Health != nil, exp.OBDExt != nil, exp.TimeObs != nil, exp.Wifi != nil:
 				checkScanVector(t, dir, &exp)
 				if exp.Events != nil {
 					checkEventsVector(t, dir, &exp)
@@ -381,6 +395,9 @@ func TestConformanceVectors(t *testing.T) {
 				}
 				if exp.OBDExt != nil {
 					checkOBDExtVector(t, dir, &exp)
+				}
+				if exp.Wifi != nil {
+					checkWifiVector(t, dir, &exp)
 				}
 				if exp.TimeObs != nil {
 					checkTimeObsVector(t, dir, &exp)
@@ -1118,5 +1135,54 @@ func checkUpdateVector(t *testing.T, dir string, exp *vectorExpectation) {
 	}
 	if got := hex.EncodeToString(d.ImageSHA256[:]); got != exp.Update.ImageSHA256Hex {
 		t.Errorf("image_sha256 = %s, want %s", got, exp.Update.ImageSHA256Hex)
+	}
+}
+
+func checkWifiVector(t *testing.T, dir string, exp *vectorExpectation) {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(dir, "segment.bin"))
+	if err != nil {
+		t.Fatalf("read segment.bin: %v", err)
+	}
+	res, err := ScanSegment(b, ScanState{}, vectorKeys(t))
+	if err != nil {
+		t.Fatalf("ScanSegment: %v", err)
+	}
+	seen := 0
+	for i := range res.Frames {
+		f := &res.Frames[i]
+		if f.RecordType != RecordWifiScan {
+			continue
+		}
+		if seen >= len(exp.Wifi.Records) {
+			t.Fatalf("segment holds more WIFI_SCAN records than expected")
+		}
+		want := exp.Wifi.Records[seen]
+		seen++
+		w, err := ParseWifiScan(f.Payload)
+		if err != nil {
+			t.Errorf("record %d does not parse: %v", seen-1, err)
+			continue
+		}
+		if f.MonotonicMS != want.MonotonicMS || w.Learning() != want.Learning ||
+			(w.Flags&WifiScanActive != 0) != want.Active || w.ScanMS != want.ScanMS {
+			t.Errorf("record %d: mono %d learning %v active %v scan_ms %d, want %d %v %v %d", seen-1,
+				f.MonotonicMS, w.Learning(), w.Flags&WifiScanActive != 0, w.ScanMS,
+				want.MonotonicMS, want.Learning, want.Active, want.ScanMS)
+		}
+		if len(w.APs) != len(want.APs) {
+			t.Errorf("record %d has %d access points, want %d", seen-1, len(w.APs), len(want.APs))
+			continue
+		}
+		for j, a := range w.APs {
+			wa := want.APs[j]
+			if a.BSSIDString() != wa.BSSID || a.RSSIdBm != wa.RSSIdBm || a.Channel != wa.Channel {
+				t.Errorf("record %d entry %d = %s %d ch%d, want %s %d ch%d", seen-1, j,
+					a.BSSIDString(), a.RSSIdBm, a.Channel, wa.BSSID, wa.RSSIdBm, wa.Channel)
+			}
+		}
+	}
+	if seen != len(exp.Wifi.Records) {
+		t.Errorf("found %d WIFI_SCAN records, want %d", seen, len(exp.Wifi.Records))
 	}
 }

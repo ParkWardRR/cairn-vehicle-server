@@ -807,3 +807,84 @@ func ParseTimeObservation(p []byte) (*TimeObservation, error) {
 
 	return &o, nil
 }
+
+// WIFI_SCAN (spec §4.13).
+
+// WifiScanLearning is bit 0 of WIFI_SCAN flags: an accepted GNSS fix was no older than
+// 2 s when the scan completed, so the scan can teach where its access points are.
+const WifiScanLearning = 1 << 0
+
+// WifiScanActive is bit 1: the scan sent probe requests rather than only listening.
+const WifiScanActive = 1 << 1
+
+// WifiScanMaxEntries is the most access points one record carries.
+const WifiScanMaxEntries = 16
+
+// WifiAP is one access point a scan saw. There is no SSID: the format never carries one.
+type WifiAP struct {
+	BSSID   [6]byte
+	RSSIdBm int8
+	Channel uint8
+}
+
+// BSSIDString is the lowercase colon form, "aa:bb:cc:dd:ee:ff".
+func (a WifiAP) BSSIDString() string {
+	return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x", a.BSSID[0], a.BSSID[1], a.BSSID[2], a.BSSID[3], a.BSSID[4], a.BSSID[5])
+}
+
+// WifiScan is the access points one scan saw, strongest first, as evidence of where the
+// car was when GNSS could not say. A position derived from it is an estimate, never a fix.
+type WifiScan struct {
+	Flags  uint8
+	ScanMS uint16
+	APs    []WifiAP
+}
+
+// Learning reports whether the scan was taken beside an accepted GNSS fix.
+func (w *WifiScan) Learning() bool { return w.Flags&WifiScanLearning != 0 }
+
+// ParseWifiScan decodes a WIFI_SCAN payload: 4 bytes, then 8 per access point.
+func ParseWifiScan(p []byte) (*WifiScan, error) {
+	if len(p) < 4 {
+		return nil, fmt.Errorf("WIFI_SCAN payload is %d bytes, want at least 4", len(p))
+	}
+	n := int(p[0])
+	if n > WifiScanMaxEntries {
+		return nil, fmt.Errorf("WIFI_SCAN count %d exceeds %d", n, WifiScanMaxEntries)
+	}
+	if len(p) != 4+8*n {
+		return nil, fmt.Errorf("WIFI_SCAN payload is %d bytes, want %d for %d entries", len(p), 4+8*n, n)
+	}
+	if p[1]&^(WifiScanLearning|WifiScanActive) != 0 {
+		return nil, fmt.Errorf("WIFI_SCAN flags 0x%02x set reserved bits", p[1])
+	}
+	w := &WifiScan{Flags: p[1], ScanMS: binary.LittleEndian.Uint16(p[2:4]), APs: make([]WifiAP, n)}
+	for i := 0; i < n; i++ {
+		e := p[4+8*i : 12+8*i]
+		copy(w.APs[i].BSSID[:], e[0:6])
+		w.APs[i].RSSIdBm = int8(e[6])
+		w.APs[i].Channel = e[7]
+	}
+	return w, nil
+}
+
+// EncodeWifiScan is the inverse of ParseWifiScan, for writers and test vectors.
+func EncodeWifiScan(w *WifiScan) ([]byte, error) {
+	if len(w.APs) > WifiScanMaxEntries {
+		return nil, fmt.Errorf("WIFI_SCAN with %d entries exceeds %d", len(w.APs), WifiScanMaxEntries)
+	}
+	if w.Flags&^(WifiScanLearning|WifiScanActive) != 0 {
+		return nil, fmt.Errorf("WIFI_SCAN flags 0x%02x set reserved bits", w.Flags)
+	}
+	p := make([]byte, 4+8*len(w.APs))
+	p[0] = byte(len(w.APs))
+	p[1] = w.Flags
+	binary.LittleEndian.PutUint16(p[2:4], w.ScanMS)
+	for i, a := range w.APs {
+		e := p[4+8*i : 12+8*i]
+		copy(e[0:6], a.BSSID[:])
+		e[6] = byte(a.RSSIdBm)
+		e[7] = a.Channel
+	}
+	return p, nil
+}

@@ -37,6 +37,7 @@ const (
 	RecordPolicySnapshot  RecordType = 0x09
 	RecordOBDExtended     RecordType = 0x0A
 	RecordTimeObservation RecordType = 0x0B
+	RecordWifiScan        RecordType = 0x0C
 )
 
 // Known reports whether this implementation understands the record type.
@@ -45,7 +46,7 @@ const (
 // decoder. The frame CRC still applies, so a skipped record remains
 // integrity-checked.
 func (t RecordType) Known() bool {
-	return t >= RecordGNSSSample && t <= RecordTimeObservation
+	return t >= RecordGNSSSample && t <= RecordWifiScan
 }
 
 func (t RecordType) String() string {
@@ -72,6 +73,8 @@ func (t RecordType) String() string {
 		return "TIME_OBSERVATION"
 	case RecordOBDExtended:
 		return "OBD_EXTENDED"
+	case RecordWifiScan:
+		return "WIFI_SCAN"
 	default:
 		return fmt.Sprintf("UNKNOWN(0x%02x)", uint8(t))
 	}

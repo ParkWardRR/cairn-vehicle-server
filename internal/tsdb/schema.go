@@ -141,6 +141,28 @@ CREATE TABLE time_obs (
     adopted    BOOLEAN
 );
 
+-- Wi-Fi scans (format v3 §4.13): one row per scan, and one per access point it saw (same
+-- seq). No SSID exists anywhere in the store. flags bit 0 = a learning scan, taken beside
+-- an accepted GNSS fix; bit 1 = active scan. A scan's position is an estimate derived in
+-- the views below, never a fix.
+CREATE TABLE wifi_scan (
+    vehicle_id VARCHAR NOT NULL,
+    content_root VARCHAR, boot_id VARCHAR, mono_ms UINTEGER, seq UINTEGER,
+    observed_at TIMESTAMP,
+    flags      UTINYINT,
+    scan_ms    USMALLINT,
+    ap_count   UTINYINT
+);
+
+CREATE TABLE wifi_ap_obs (
+    vehicle_id VARCHAR NOT NULL,
+    content_root VARCHAR, boot_id VARCHAR, mono_ms UINTEGER, seq UINTEGER,
+    observed_at TIMESTAMP,
+    bssid      VARCHAR,   -- "aa:bb:cc:dd:ee:ff"
+    rssi_dbm   TINYINT,
+    channel    UTINYINT
+);
+
 -- The owner's tune records, copied from the vehicle registry when the store is built (the
 -- registry is the one place they are written). tuned_at is the start of the tune's day,
 -- UTC. A store with no tune records simply has no rows here.
@@ -159,13 +181,13 @@ CREATE TABLE tune (
 // record -- which is how time_obs took the store down in a crash loop on
 // 2026-10-08. TestEveryTableHasAnAppender ties this list to the schema so the two
 // cannot drift again.
-var bundleTables = []string{"bundles", "position", "imu", "obd", "boost", "status", "transition", "gap", "time_obs", "tune"}
+var bundleTables = []string{"bundles", "position", "imu", "obd", "boost", "status", "transition", "gap", "time_obs", "wifi_scan", "wifi_ap_obs", "tune"}
 
 // sampleTables are the tables physically ordered by (vehicle_id, boot_id,
 // mono_ms) once a load finishes. Sorting is what lets DuckDB's min/max zone
 // maps skip row groups on a time-range predicate and what keeps an ASOF join a
 // streaming merge rather than a hash build.
-var sampleTables = []string{"position", "imu", "obd", "boost", "status", "transition", "time_obs"}
+var sampleTables = []string{"position", "imu", "obd", "boost", "status", "transition", "time_obs", "wifi_scan", "wifi_ap_obs"}
 
 // viewsSQL is the analysis surfaces for a store with no module set: buildViewsSQL(nil).
 // It is what demo.go and the tests use, and it must stay byte-identical to the text that
@@ -375,6 +397,77 @@ SELECT f.vehicle_id, f.content_root, f.boot_id, f.mono_ms, f.seq, f.observed_at,
 FROM judged f
 LEFT JOIN imu_near i ON i.vehicle_id = f.vehicle_id AND i.boot_id = f.boot_id
     AND i.s = CAST(f.mono_ms // 1000 AS BIGINT);
+
+-- Where each access point is, learned from the trusted GNSS fix beside each learning scan
+-- that heard it (no more than 2 s before it, under 20 m/s). Weighted by signal (10^(dBm/20),
+-- so the strong readings taken close to it dominate), with spread_m the RMS distance of
+-- its sightings from that centre. An access point needs two sightings; one seen over more
+-- than 300 m (a bus, a train, a hotspot that slipped the device's filter) is not a place.
+CREATE VIEW v_wifi_ap_learned AS
+WITH fixes AS (
+    SELECT vehicle_id, boot_id, CAST(mono_ms AS BIGINT) AS mono_ms, lat, lon, speed_mps
+    FROM v_position_trusted
+    WHERE trusted AND coalesce(source_flags, 0) & 32 = 0
+),
+learn AS (
+    SELECT a.vehicle_id, a.boot_id, CAST(a.mono_ms AS BIGINT) AS mono_ms, a.observed_at, a.bssid, a.rssi_dbm
+    FROM wifi_ap_obs a JOIN wifi_scan s USING (vehicle_id, boot_id, seq)
+    WHERE s.flags & 1 = 1
+),
+placed AS (
+    SELECT l.bssid, l.rssi_dbm, l.observed_at, f.lat, f.lon, pow(10, l.rssi_dbm / 20.0) AS w
+    FROM learn l ASOF JOIN fixes f
+      ON f.vehicle_id = l.vehicle_id AND f.boot_id = l.boot_id AND l.mono_ms >= f.mono_ms
+    WHERE l.mono_ms - f.mono_ms <= 2000 AND coalesce(f.speed_mps, 0) < 20
+),
+centre AS (
+    SELECT bssid, sum(lat * w) / sum(w) AS lat, sum(lon * w) / sum(w) AS lon, count(*) AS observations,
+           max(rssi_dbm) AS max_rssi_dbm, min(observed_at) AS first_seen, max(observed_at) AS last_seen
+    FROM placed GROUP BY bssid HAVING count(*) >= 2
+)
+SELECT c.bssid, c.lat, c.lon, c.observations,
+       sqrt(avg(pow((p.lat - c.lat) * 111320.0, 2) + pow((p.lon - c.lon) * 111320.0 * cos(radians(c.lat)), 2))) AS spread_m,
+       c.max_rssi_dbm, c.first_seen, c.last_seen
+FROM centre c JOIN placed p USING (bssid)
+GROUP BY c.bssid, c.lat, c.lon, c.observations, c.max_rssi_dbm, c.first_seen, c.last_seen
+HAVING sqrt(avg(pow((p.lat - c.lat) * 111320.0, 2) + pow((p.lon - c.lon) * 111320.0 * cos(radians(c.lat)), 2))) <= 300;
+
+-- Scans with no trusted GNSS fix within 5 s either side: the moments a Wi-Fi estimate is
+-- for. est_* is the learned estimate -- the signal-weighted centre of the scan's access
+-- points that v_wifi_ap_learned knows, est_accuracy_m their mean spread plus 25 m -- and is
+-- NULL when none is known. A consumer may refine it (the owner's places, an external
+-- service); it must never treat it as a fix or take a speed from it.
+CREATE VIEW v_wifi_scan_unfixed AS
+WITH fixes AS (
+    SELECT vehicle_id, boot_id, CAST(mono_ms AS BIGINT) AS mono_ms
+    FROM v_position_trusted WHERE trusted
+),
+scans AS (
+    SELECT s.*, CAST(s.mono_ms AS BIGINT) AS m FROM wifi_scan s
+),
+nearest AS (
+    SELECT s.vehicle_id, s.boot_id, s.mono_ms, s.seq, s.observed_at, s.ap_count,
+           s.m - b.mono_ms AS before_ms, a.mono_ms - s.m AS after_ms
+    FROM scans s
+    ASOF LEFT JOIN fixes b ON b.vehicle_id = s.vehicle_id AND b.boot_id = s.boot_id AND s.m >= b.mono_ms
+    ASOF LEFT JOIN fixes a ON a.vehicle_id = s.vehicle_id AND a.boot_id = s.boot_id AND s.m <= a.mono_ms
+),
+unfixed AS (
+    SELECT * FROM nearest
+    WHERE coalesce(before_ms, 999999) > 5000 AND coalesce(after_ms, 999999) > 5000
+),
+est AS (
+    SELECT o.vehicle_id, o.boot_id, o.seq,
+           sum(l.lat * pow(10, o.rssi_dbm / 20.0)) / sum(pow(10, o.rssi_dbm / 20.0)) AS est_lat,
+           sum(l.lon * pow(10, o.rssi_dbm / 20.0)) / sum(pow(10, o.rssi_dbm / 20.0)) AS est_lon,
+           avg(l.spread_m) + 25 AS est_accuracy_m,
+           CAST(count(*) AS INTEGER) AS est_aps
+    FROM wifi_ap_obs o JOIN v_wifi_ap_learned l USING (bssid)
+    GROUP BY 1, 2, 3
+)
+SELECT u.vehicle_id, u.boot_id, u.mono_ms, u.seq, u.observed_at, u.ap_count,
+       e.est_lat, e.est_lon, e.est_accuracy_m, e.est_aps
+FROM unfixed u LEFT JOIN est e USING (vehicle_id, boot_id, seq);
 
 -- A leg is one continuous drive separated from the next by a stop.
 --

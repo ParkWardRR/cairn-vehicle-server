@@ -488,6 +488,19 @@ func appendResult(apps map[string]*duckdb.Appender, ref Ref, res *decode.Result,
 			return expected{}, err
 		}
 	}
+	for i := range res.WifiScans {
+		w := &res.WifiScans[i]
+		if err := row("wifi_scan", veh(w.VehicleID), root, boot, w.MonotonicMS, w.Seq, w.ObservedAt,
+			w.Flags, w.ScanMS, uint8(len(w.APs))); err != nil {
+			return expected{}, err
+		}
+		for _, a := range w.APs {
+			if err := row("wifi_ap_obs", veh(w.VehicleID), root, boot, w.MonotonicMS, w.Seq, w.ObservedAt,
+				a.BSSIDString(), a.RSSIdBm, a.Channel); err != nil {
+				return expected{}, err
+			}
+		}
+	}
 
 	return expected{root: root, counts: c}, nil
 }

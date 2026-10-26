@@ -53,13 +53,20 @@ import (
 // and v_trip_summary now read it, so a receiver's phantom run no longer makes a leg, a
 // distance or a max speed.
 //
-// Still store/v1.6 since 2026-10-25: v_position_trusted's verdict also refuses a fix with
-// fewer than six satellites or faster than OBD on both sides of it. The view's columns and
-// their meaning ("the evidence does not contradict this fix") are unchanged.
-const StoreContract = "store/v1.6"
+// store/v1.6's v_position_trusted verdict was refined on 2026-10-25 without a minor: it also
+// refuses a fix with fewer than six satellites or faster than OBD on both sides of it. The
+// view's columns and their meaning ("the evidence does not contradict this fix") are unchanged.
+//
+// store/v1.7 adds, all additive: the tables wifi_scan and wifi_ap_obs (format v3 §4.13: one
+// row per Wi-Fi scan and one per access point it saw; no SSIDs), the view v_wifi_ap_learned
+// (each access point's position, learned from trusted fixes beside learning scans), and the
+// view v_wifi_scan_unfixed (scans with no trusted fix within 5 s, with the learned estimate).
+// A Wi-Fi position is an estimate: no existing view reads these, so no trip, distance or
+// speed changes.
+const StoreContract = "store/v1.7"
 
 // schemaFingerprint is the fingerprint of the schema StoreContract describes.
-const schemaFingerprint = "907d90832aa46af2f7a536dfe4cf074f19179f9c1d86324247bd203b5a5c3733"
+const schemaFingerprint = "b58b96368a572cf410b8dd6a34546139ffa242f63f63d37524b5d21452440aa1"
 
 // Capabilities is what a running store offers: the objects present in its database.
 type Capabilities struct {

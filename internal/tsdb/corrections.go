@@ -102,7 +102,7 @@ func (c *VehicleCorrection) check() error {
 }
 
 // vehicleTables are the tables that carry a vehicle_id, bundles first.
-var vehicleTables = []string{"bundles", "position", "imu", "obd", "boost", "status", "transition", "gap", "time_obs"}
+var vehicleTables = []string{"bundles", "position", "imu", "obd", "boost", "status", "transition", "gap", "time_obs", "wifi_scan", "wifi_ap_obs"}
 
 func applyVehicleCorrections(ctx context.Context, sdb *sql.DB, cs []VehicleCorrection, report *Report) error {
 	for _, c := range cs {

@@ -90,6 +90,7 @@ type expectation struct {
 	Update   *updateExpectation     `json:"update,omitempty"`
 	OBDExt   *obdExtExpectation     `json:"obd_ext,omitempty"`
 	TimeObs  *timeObsExpectation    `json:"time_obs,omitempty"`
+	Wifi     *wifiExpectation       `json:"wifi_scan,omitempty"`
 }
 
 type scanExpectation struct {
@@ -229,6 +230,25 @@ type timeObsExpectation struct {
 	Note    string            `json:"note"`
 }
 
+type expectedWifiAP struct {
+	BSSID   string `json:"bssid"`
+	RSSIdBm int8   `json:"rssi_dbm"`
+	Channel uint8  `json:"channel"`
+}
+
+type expectedWifiScan struct {
+	MonotonicMS uint32           `json:"monotonic_ms"`
+	Learning    bool             `json:"learning"`
+	Active      bool             `json:"active"`
+	ScanMS      uint16           `json:"scan_ms"`
+	APs         []expectedWifiAP `json:"aps"`
+}
+
+type wifiExpectation struct {
+	Records []expectedWifiScan `json:"records"`
+	Note    string             `json:"note"`
+}
+
 type obdExtExpectation struct {
 	Records []expectedOBDExt `json:"records"`
 	Note    string           `json:"note"`
@@ -300,6 +320,7 @@ func run(outDir, enrolmentDir string) error {
 		{"health-bitmap", vectorHealthBitmap},
 		{"obd-extended", vectorOBDExtended},
 		{"time-observation", vectorTimeObservation},
+		{"wifi-scan", vectorWifiScan},
 		{"update-descriptor-valid", vectorUpdateDescriptorValid},
 		{"update-descriptor-bad-signature", vectorUpdateDescriptorBadSignature},
 
@@ -1669,6 +1690,68 @@ func vectorTimeObservation(dir string, _, _ ed25519.PrivateKey) error {
 				"the comparison the record exists to make possible. The phone had the time " +
 				"128 s before GNSS did: a drive that never gets a fix is datable from these " +
 				"records even though the manifest basis would be zero.",
+		},
+	}, segmentFiles(w.Bytes()))
+}
+
+// Three WIFI_SCAN records: a cold start that heard nothing, a garage with three access
+// points, and a learning scan beside a fix that kept the sixteen strongest.
+func vectorWifiScan(dir string, _, _ ed25519.PrivateKey) error {
+	w, err := newWriter(testHeader(0), format.ScanState{})
+	if err != nil {
+		return err
+	}
+	ap := func(seed byte, rssi int8, ch uint8) format.WifiAP {
+		// Universally administered (bit 1 of the first octet clear): a device never
+		// writes a locally administered BSSID, so neither does a vector.
+		return format.WifiAP{BSSID: [6]byte{0x88, 0xdc, 0x97, 0x07, seed, 0xdb}, RSSIdBm: rssi, Channel: ch}
+	}
+	var sixteen []format.WifiAP
+	for i := 0; i < 16; i++ {
+		sixteen = append(sixteen, ap(byte(0x10+i), int8(-40-3*i), uint8(1+i%11)))
+	}
+	scans := []struct {
+		mono uint32
+		s    format.WifiScan
+	}{
+		{5000, format.WifiScan{Flags: format.WifiScanActive, ScanMS: 2140}},
+		{65000, format.WifiScan{Flags: format.WifiScanActive, ScanMS: 1870, APs: []format.WifiAP{
+			ap(0xb8, -52, 11), ap(0xc1, -71, 6), ap(0x02, -88, 1)}}},
+		{180000, format.WifiScan{Flags: format.WifiScanActive | format.WifiScanLearning, ScanMS: 2310, APs: sixteen}},
+	}
+	var expected []expectedWifiScan
+	for _, sc := range scans {
+		payload, err := format.EncodeWifiScan(&sc.s)
+		if err != nil {
+			return err
+		}
+		if err := w.Append(format.RecordWifiScan, 1, 0, sc.mono, payload); err != nil {
+			return err
+		}
+		e := expectedWifiScan{MonotonicMS: sc.mono, Learning: sc.s.Learning(),
+			Active: sc.s.Flags&format.WifiScanActive != 0, ScanMS: sc.s.ScanMS, APs: []expectedWifiAP{}}
+		for _, a := range sc.s.APs {
+			e.APs = append(e.APs, expectedWifiAP{BSSID: a.BSSIDString(), RSSIdBm: a.RSSIdBm, Channel: a.Channel})
+		}
+		expected = append(expected, e)
+	}
+
+	exp, keyed, err := scanBoth(w.Bytes(), format.ScanState{})
+	if err != nil {
+		return err
+	}
+	return writeVector(dir, "wifi-scan", &expectation{
+		Name:        "wifi-scan",
+		Description: "Three WIFI_SCAN records: no access points, three, and sixteen in a learning scan.",
+		Asserts: "Each record decodes to its count, flags, scan duration and entries, strongest " +
+			"first, each BSSID in transmission order with its signal (signed dBm) and channel. " +
+			"A scan that heard nothing is a valid record with count 0. No SSID is carried.",
+		Scan:  exp,
+		Keyed: keyed,
+		Wifi: &wifiExpectation{
+			Records: expected,
+			Note: "The learning flag marks the scan taken beside an accepted GNSS fix: the only kind " +
+				"a reader may learn access-point positions from.",
 		},
 	}, segmentFiles(w.Bytes()))
 }

@@ -50,7 +50,10 @@ import (
 // the output digest. The samples themselves are unchanged; the digest moves
 // because the output now says which car it belongs to, and a store keyed by
 // vehicle must not be able to hold a v2 row that does not.
-const Version = 3
+//
+// Version 4 decodes WIFI_SCAN (format v3 §4.13) into WifiScans, which version 3
+// counted as unknown records, and folds them into the digest.
+const Version = 4
 
 // Result is what one decode produced.
 type Result struct {
@@ -81,6 +84,10 @@ type Result struct {
 	// evidence rather than folded into a single answer: choosing between sources
 	// is policy, and policy belongs where it can change without reflashing.
 	TimeObs []TimeObservation
+
+	// WifiScans are the access points each Wi-Fi scan saw (§4.13): evidence of
+	// where the car was when GNSS could not say, resolved into an estimate later.
+	WifiScans []WifiScan
 
 	Trip   *Trip
 	Events []Event
@@ -165,6 +172,13 @@ func (r *Result) OutputDigest() [32]byte {
 	for i := range r.Gaps {
 		g := &r.Gaps[i]
 		write(g.VehicleID[:], int64(g.Seq), int64(g.DurationMS), int64(g.Cause))
+	}
+	for i := range r.WifiScans {
+		w := &r.WifiScans[i]
+		write(w.VehicleID[:], int64(w.Seq), int64(w.MonotonicMS), int64(w.Flags), int64(w.ScanMS))
+		for _, a := range w.APs {
+			write(a.BSSID[:], int64(a.RSSIdBm), int64(a.Channel))
+		}
 	}
 	for i := range r.Events {
 		e := &r.Events[i]
@@ -319,6 +333,19 @@ type TimeObservation struct {
 	AccuracyMS     *uint32
 	Source         string
 	Adopted        bool
+}
+
+// WifiScan is one Wi-Fi scan (spec §4.13): no SSIDs, strongest access point first.
+type WifiScan struct {
+	VehicleID [16]byte
+
+	Seq         uint32
+	MonotonicMS uint32
+	ObservedAt  time.Time
+
+	Flags  uint8
+	ScanMS uint16
+	APs    []format.WifiAP
 }
 
 // Trip is the derived journey.
@@ -693,6 +720,22 @@ func (r *Result) decodeFrame(manifest *format.Manifest, f *format.Frame, segment
 		// case the field exists to survive -- Source already renders it as
 		// "unknown(N)" so nothing is silently relabelled.
 		r.TimeObs = append(r.TimeObs, row)
+
+	case format.RecordWifiScan:
+		w, err := format.ParseWifiScan(f.Payload)
+		if err != nil {
+			warn(err)
+			return
+		}
+		r.WifiScans = append(r.WifiScans, WifiScan{
+			VehicleID:   manifest.VehicleID,
+			Seq:         f.Seq,
+			MonotonicMS: f.MonotonicMS,
+			ObservedAt:  observedAt(manifest, f.MonotonicMS, 0),
+			Flags:       w.Flags,
+			ScanMS:      w.ScanMS,
+			APs:         w.APs,
+		})
 
 	case format.RecordIMURawWindow, format.RecordPolicySnapshot:
 		// Understood but not yet normalized into its own table. Counted so the

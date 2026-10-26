@@ -590,6 +590,11 @@ The dashboard reads the store, not the server's internals, and the store has a v
   check could see them — drawing a spur, a phantom leg and the trip's maximum speed. The two rules catch all 37 and,
   across the other stored drives, about a dozen fixes in 13,000. `v_trip_leg` and `v_trip_summary` read trusted
   fixes only; `position` itself is untouched, so a consumer that wants the raw receiver still has it.
+- **Wi-Fi scans** (`v1.7`). `wifi_scan` and `wifi_ap_obs` hold the dongle's Wi-Fi scans (format v3 §4.13: BSSID,
+  signal, channel; never an SSID). `v_wifi_ap_learned` places each access point from the trusted fixes beside
+  learning scans; `v_wifi_scan_unfixed` lists scans with no trusted fix within 5 s and a learned estimate for each. The
+  dashboard refines estimates with the owner's places and BeaconDB. An estimate is never a fix: no trip, distance or
+  speed reads these.
 - **Table macros** (parameterised queries; a view cannot take a parameter), since `v1.2`: `period_summary(from_day, to_day)`,
   per-vehicle trips, duration, distance and max speeds over a half-open UTC date range, called as
   `SELECT * FROM period_summary('2026-03-01', '2026-04-01')` over `POST /query`.

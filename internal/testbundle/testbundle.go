@@ -141,6 +141,10 @@ type Options struct {
 	// Zero means every sample has a fix.
 	FixlessFrom int
 
+	// WifiScans writes this many WIFI_SCAN records into the GNSS segment, each hearing
+	// two access points, as a cold start would. Zero writes none.
+	WifiScans int
+
 	// VehicleID and AssignmentID bind the bundle. Zero means the conventional
 	// synthetic values (VehicleID(), AssignmentID()). They are written into every
 	// segment header and the manifest.
@@ -237,12 +241,25 @@ func Build(opts Options) (*Bundle, error) {
 			}
 		}
 	}
+	for i := 0; i < opts.WifiScans; i++ {
+		p, err := format.EncodeWifiScan(&format.WifiScan{Flags: format.WifiScanActive, ScanMS: 2000, APs: []format.WifiAP{
+			{BSSID: [6]byte{0x88, 0xdc, 0x97, 0x07, 0xb8, 0xdb}, RSSIdBm: -50, Channel: 11},
+			{BSSID: [6]byte{0x88, 0xdc, 0x97, 0x07, 0xb8, 0xdc}, RSSIdBm: int8(-60 - i), Channel: 100},
+		}})
+		if err != nil {
+			return nil, err
+		}
+		if err := w0.Append(format.RecordWifiScan, 1, 0, uint32(500+i*100), p); err != nil {
+			return nil, err
+		}
+	}
 	seg0 := append([]byte(nil), w0.Bytes()...)
 
 	w1, err := id.writer(deviceID, 1, w0.NextState())
 	if err != nil {
 		return nil, err
 	}
+
 	for i := 0; i < opts.OBDSamples; i++ {
 		if err := w1.Append(format.RecordOBDSnapshot, 1, 0, uint32(12000+i*1000), OBDPayload()); err != nil {
 			return nil, fmt.Errorf("append OBD %d: %w", i, err)
