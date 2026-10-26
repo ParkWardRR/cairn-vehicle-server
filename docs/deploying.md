@@ -256,6 +256,48 @@ a bundle, so on a store with none the snapshot checks fail for that reason, not 
 prints the commands) and is best run against a scratch instance (`-dev`, its own `-data`
 and `cairn-tsdb`), so no synthetic bundle reaches the real store.
 
+## GNSS assistance (u-blox AssistNow)
+
+Optional. With it, the dongle's receiver starts with seven days of satellite orbit
+predictions instead of downloading ephemeris from the sky: measured on 2026-10-25, a cold
+receiver in the M240i took 8.5 and 10.5 minutes to a usable fix (30 on 2026-10-24).
+Contract: `format/v3` §6.4 in the contracts repository.
+
+1. The Thingstream Device Profile credential goes in `/etc/cairn/assistnow-ztp.json`,
+   `0640 root:cairn`: `{"endpoint": "https://api.thingstream.io/ztp/assistnow/credentials",
+   "token": "<the profile's ZTP token>"}`. The unit passes
+   `-assistnow-ztp /etc/cairn/assistnow-ztp.json`; with no file the feature is off and its
+   two routes are not registered. The token is never logged.
+2. The dongle reports its receiver (`POST /api/v2/gnss-assist/receiver`, its
+   UBX-SEC-UNIQID and UBX-MON-VER replies) during an upload. The server then registers that
+   receiver with ZTP in the background (the chipcode is kept in
+   `/var/lib/cairn/gnss-assist/receivers/<unique id>/credentials.json`, `0600`) and
+   downloads `uporb_7,ualm` for GPS, Galileo, BeiDou and GLONASS: about 77 KB, once a day,
+   at most twice in 24 h, and not again before 00:00 UTC after a 403 (usage limit).
+   An Evaluation profile allows 300 downloads a month and three receivers.
+3. The dongle downloads it (`GET /api/v2/gnss-assist`, `ETag` = quoted SHA-256 of the body,
+   `304` on a match) during a later upload.
+
+The journal says `GNSS assistance on` at start, then `GNSS receiver reported`,
+`AssistNow registered` and `AssistNow Predictive Orbits stored` with byte and message counts.
+To look without the journal (no secrets are printed):
+
+```bash
+sudo -u cairn /usr/local/bin/cairn-server -data /var/lib/cairn \
+  -assistnow-ztp /etc/cairn/assistnow-ztp.json -gnss-assist-status
+```
+
+An identity captured some other way (two whole UBX frames, as hex) can be registered and
+fetched by hand, which makes a live call to u-blox immediately:
+
+```bash
+sudo -u cairn /usr/local/bin/cairn-server -data /var/lib/cairn \
+  -assistnow-ztp /etc/cairn/assistnow-ztp.json -gnss-assist-register <SEC_UNIQID_HEX>,<MON_VER_HEX>
+```
+
+The unit sets `GODEBUG=netdns=go`: this is the service's only outbound call, and the
+sandbox's `RestrictAddressFamilies` leaves glibc's NSS modules no AF_UNIX socket.
+
 ## Building
 
 The `Makefile` at the repository root detects the host CPU and selects `GOAMD64=v3`,

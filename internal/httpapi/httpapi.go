@@ -56,6 +56,10 @@ type Server struct {
 	// the firmware endpoints entirely rather than serving 404s, so a deployment
 	// that does not do OTA presents no such surface.
 	firmwareDir string
+
+	// gnss serves AssistNow data to the dongle. Nil leaves its routes
+	// unregistered, for the same reason as firmwareDir.
+	gnss GNSSAssist
 }
 
 // Config configures a Server.
@@ -75,6 +79,9 @@ type Config struct {
 
 	// FirmwareDir enables the OTA endpoints. Empty leaves them unregistered.
 	FirmwareDir string
+
+	// GNSSAssist enables the GNSS assistance routes. Nil leaves them unregistered.
+	GNSSAssist GNSSAssist
 }
 
 // New creates a Server.
@@ -92,6 +99,7 @@ func New(cfg Config) *Server {
 		log:               log,
 		requireClientCert: cfg.RequireClientCert,
 		firmwareDir:       cfg.FirmwareDir,
+		gnss:              cfg.GNSSAssist,
 	}
 }
 
@@ -107,6 +115,13 @@ func (s *Server) Routes() http.Handler {
 	if s.firmwareDir != "" {
 		mux.HandleFunc("GET /api/v2/firmware/latest", s.handleFirmwareLatest)
 		mux.HandleFunc("GET /api/v2/firmware/{digest}/image", s.handleFirmwareImage)
+	}
+
+	// GNSS assistance. Present only when the server holds an AssistNow
+	// credential (cairn-server -assistnow-ztp).
+	if s.gnss != nil {
+		mux.HandleFunc("POST /api/v2/gnss-assist/receiver", s.handleGNSSReceiver)
+		mux.HandleFunc("GET /api/v2/gnss-assist", s.handleGNSSAssist)
 	}
 
 	mux.HandleFunc("POST /api/v2/bundles/offer", s.handleOffer)

@@ -29,7 +29,25 @@ EnvironmentFile=/etc/cairn/server.env
 # systemd exposes at %d for the life of the unit only. Create it once with:
 #   openssl rand -hex 32 | sudo install -m 0400 -o root -g root /dev/stdin /etc/cairn/keystore.master
 LoadCredential=keystore-master:/etc/cairn/keystore.master
-ExecStart=/usr/local/bin/cairn-server -keystore-master %d/keystore-master $CAIRN_ARGS
+
+# GNSS assistance (u-blox AssistNow Predictive Orbits for the dongle's receiver).
+# The Thingstream ZTP credential is installed by hand as
+# /etc/cairn/assistnow-ztp.json, 0640 root:cairn, {"endpoint": ..., "token": ...}.
+# Named here rather than in server.env because it is a fixed path and harmless
+# when absent: no file means the feature is off and its routes do not exist.
+# The server registers the receiver the dongle reports, keeps the chipcode in
+# /var/lib/cairn/gnss-assist (0600), and downloads seven days of predictions
+# once a day. Check it with:
+#   sudo -u cairn /usr/local/bin/cairn-server -data /var/lib/cairn -assistnow-ztp /etc/cairn/assistnow-ztp.json -gnss-assist-status
+ExecStart=/usr/local/bin/cairn-server -keystore-master %d/keystore-master -assistnow-ztp /etc/cairn/assistnow-ztp.json $CAIRN_ARGS
+
+# The one outbound call this service makes is to u-blox, so name resolution has
+# to work inside the sandbox below. RestrictAddressFamilies leaves no AF_UNIX,
+# which glibc's NSS modules (nss-resolve and friends) need; the binary links
+# DuckDB, so cgo is on and Go would otherwise hand lookups to glibc. Go's own
+# resolver reads /etc/resolv.conf and asks over UDP/TCP, which the sandbox
+# allows.
+Environment=GODEBUG=netdns=go
 
 Restart=on-failure
 RestartSec=5s
