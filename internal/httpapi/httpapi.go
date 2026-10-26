@@ -56,6 +56,10 @@ type Server struct {
 	// the firmware endpoints entirely rather than serving 404s, so a deployment
 	// that does not do OTA presents no such surface.
 	firmwareDir string
+
+	// anchors serves the learned Wi-Fi access points to the dongle. Nil leaves
+	// its route unregistered, for the same reason as firmwareDir.
+	anchors WiFiAnchors
 }
 
 // Config configures a Server.
@@ -75,6 +79,9 @@ type Config struct {
 
 	// FirmwareDir enables the OTA endpoints. Empty leaves them unregistered.
 	FirmwareDir string
+
+	// WiFiAnchors enables GET /api/v2/wifi-anchors. Nil leaves it unregistered.
+	WiFiAnchors WiFiAnchors
 }
 
 // New creates a Server.
@@ -92,6 +99,7 @@ func New(cfg Config) *Server {
 		log:               log,
 		requireClientCert: cfg.RequireClientCert,
 		firmwareDir:       cfg.FirmwareDir,
+		anchors:           cfg.WiFiAnchors,
 	}
 }
 
@@ -107,6 +115,12 @@ func (s *Server) Routes() http.Handler {
 	if s.firmwareDir != "" {
 		mux.HandleFunc("GET /api/v2/firmware/latest", s.handleFirmwareLatest)
 		mux.HandleFunc("GET /api/v2/firmware/{digest}/image", s.handleFirmwareImage)
+	}
+
+	// Wi-Fi anchors for the receiver's position hint (format/v3 §6.4). Present
+	// only when the server can read the analytical store (-app-snapshot-url).
+	if s.anchors != nil {
+		mux.HandleFunc("GET /api/v2/wifi-anchors", s.handleWiFiAnchors)
 	}
 
 	mux.HandleFunc("POST /api/v2/bundles/offer", s.handleOffer)

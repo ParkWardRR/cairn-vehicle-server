@@ -38,6 +38,7 @@ import (
 	"github.com/ParkWardRR/cairn-vehicle-server/internal/outbox"
 	"github.com/ParkWardRR/cairn-vehicle-server/internal/receipts"
 	"github.com/ParkWardRR/cairn-vehicle-server/internal/vehicles"
+	"github.com/ParkWardRR/cairn-vehicle-server/internal/wifianchors"
 )
 
 func main() {
@@ -298,6 +299,14 @@ func run(cfg runConfig) error {
 	// stuck in a retry loop, not to shape normal syncs.
 	limiter := httpapi.NewLimiter(120, 2)
 
+	// The learned access points the dongle locates itself by at power-up
+	// (format/v3 §6.4) come from the same loopback cairn-tsdb the app API
+	// reads; without it the route is simply not there.
+	var anchors httpapi.WiFiAnchors
+	if cfg.app.snapshotURL != "" {
+		anchors = &wifianchors.Service{StoreURL: cfg.app.snapshotURL, Vehicles: vehicleReg}
+	}
+
 	api := httpapi.New(httpapi.Config{
 		// The device listener is the dongle talking to the server itself, so the ledger
 		// records its bundles as wifi-direct; the phone relay below is ble-relay.
@@ -309,6 +318,7 @@ func run(cfg runConfig) error {
 		Log:               cfg.log,
 		FirmwareDir:       cfg.firmwareDir,
 		RequireClientCert: requireClientCert,
+		WiFiAnchors:       anchors,
 	})
 
 	srv := &http.Server{

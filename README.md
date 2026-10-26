@@ -167,7 +167,7 @@ Three design rules explain most of the code:
 
 | Listener | Flag | Transport | Authentication | Audience and status |
 |---|---|---|---|---|
-| Device ingest | `-addr`, default `:8443` | TLS required (`-dev` allows plain HTTP); mutual TLS when `-tls-client-ca` is set | Client certificate whose CommonName must equal the manifest's device id, **plus** the manifest's Ed25519 signature | **Legacy in name, production in fact.** Routes `/api/v2/health`, `/api/v2/server/receipt-key`, `/api/v2/bundles/*`, and `/api/v2/firmware/*` when `-firmware-dir` is set. The dongle over Wi-Fi and over LTE (through Funnel), and `cairn-push` from a card. Bind the host's LAN address, not `:8443`. Always started |
+| Device ingest | `-addr`, default `:8443` | TLS required (`-dev` allows plain HTTP); mutual TLS when `-tls-client-ca` is set | Client certificate whose CommonName must equal the manifest's device id, **plus** the manifest's Ed25519 signature | **Legacy in name, production in fact.** Routes `/api/v2/health`, `/api/v2/server/receipt-key`, `/api/v2/bundles/*`, `/api/v2/firmware/*` when `-firmware-dir` is set, and `/api/v2/wifi-anchors` when `-app-snapshot-url` is set. The dongle over Wi-Fi and over LTE (through Funnel), and `cairn-push` from a card. Bind the host's LAN address, not `:8443`. Always started |
 | App API, LAN | `-app-addr`, conventionally `:8444` | TLS (1.2 minimum), no client certificate requested. Plain HTTP only on a loopback address | **Signed requests** from an enrolled app identity (P-256), or a one-hour bearer token for background transfers | The iPhone on your LAN |
 | App API, Tailnet | `-app-serve-addr`, e.g. `127.0.0.1:8445` | Plain HTTP, **loopback enforced at startup**. `tailscale serve` terminates TLS in front of it | The same signed requests. Optionally also a Tailscale identity (`-require-tailnet-identity`) | The iPhone over your Tailnet. The same API instance as the LAN listener: one sync log, one cursor, one set of clients |
 | Local API | `-app-local-addr`, e.g. `127.0.0.1:8446` | Plain HTTP, loopback enforced at startup | Reads: the loopback bind. Writes: a shared bearer token (`-app-local-token-file`). Refuses any request carrying Tailscale identity or Funnel headers | The web dashboard's server side: vehicle names, engine profiles, health summary, tune records. **Never point `tailscale serve` or a proxy at it** |
@@ -670,6 +670,29 @@ produces yet**). A bundle the ledger has no record of (one read from a card, say
 The token file must hold 64 or more characters (`openssl rand -hex 32`) and must not be world-readable, or the server
 refuses to start.
 
+## Wi-Fi anchors for the dongle's GNSS hint
+
+A cold GNSS receiver in the M240i drew nothing for the first eight minutes of the drive of 2026-10-25. At power-up the
+dongle now locates itself from a Wi-Fi scan and gives the receiver that position as an initial-position hint
+(UBX-MGA-INI-POS_LLH). The access-point positions come from the store's `v_wifi_ap_learned` (`store/v1.7`), which learns them
+from trusted fixes beside the dongle's own learning scans.
+
+`GET /api/v2/wifi-anchors` on the device listener serves them (`format/v3` §6.4). It needs a client certificate naming an
+enrolled, unrevoked device, and returns the learned access points of every vehicle the device holds an open assignment to (its
+garage). When two cars learned the same access point, the better-observed row wins.
+
+- **Body**: a 16-byte header (`"CWA1"`, version 1, record size 16, count, `generated_at` = the newest sighting behind the set),
+  then records sorted by BSSID. Each record is `{bssid[6], lat_e7 i32, lon_e7 i32, acc_m u16}`, little-endian, with
+  `acc_m = clamp(spread_m + 25, 25, 500)`. At most 4096 records are served, most observed first.
+- **Caching**: the ETag is the quoted SHA-256 of the body. The body is deterministic, so `If-None-Match` gets `304` until the
+  learned set changes.
+- **Statuses**: a device with no assignment, or with nothing learned yet, gets `200` with count 0. The store unreachable is
+  `503`, and the dongle keeps its copy. Without `-app-snapshot-url` the route is not registered (`404`).
+
+**Limits.** This is a position hint, not orbits: it saves the receiver its position search, not the ephemeris download. The
+dongle's co-processor passes no UBX replies back, so the receiver never acknowledges the hint. The dongle's TTFF log line
+(firmware README) is how to tell whether it helped.
+
 ## The app API (`sync/v1`) and `cairn-accept`
 
 The phone talks to the server through [`sync/v1`](https://github.com/ParkWardRR/cairn-driving-log-selfhosted/blob/main/contracts/sync/v1/spec.md)
@@ -729,7 +752,7 @@ passed as a credential. Every path and host below is a placeholder.
 | `-require-tailnet-identity`, `-tailnet-allow-login L` | Tailnet-class requests must also carry an allowed Tailscale login (repeatable). Needs `-trust-tailscale-serve` |
 | `-lan-cidr`, `-tailnet-cidr` | Override which ranges count as LAN and Tailnet for the audit log (repeatable) |
 | `-app-deny-other-networks` | Refuse peers in neither range |
-| `-app-snapshot-url URL` | Loopback `cairn-tsdb` base URL for `/v1/snapshot`, trip summaries and the health route |
+| `-app-snapshot-url URL` | Loopback `cairn-tsdb` base URL for `/v1/snapshot`, trip summaries, the health route and the device's `/api/v2/wifi-anchors` |
 | `-engine-profiles DIR` | Extra or replacement engine analysis profiles |
 | `-app-local-token-file FILE` | Write token for the local API |
 | `-print-enroll-key`, `-print-receipt-key`, `-list-devices`, `-revoke ID` (`-revoke-reason`), `-enroll ID` (`-enroll-key`, `-enroll-root`, `-enroll-key-version`, `-enroll-name`) | Run-and-exit modes. Prefer `cairn-admin device enroll`: `-enroll` takes the raw root on the command line |
@@ -860,7 +883,7 @@ enforced by any code. [Issue 17](https://github.com/ParkWardRR/cairn-vehicle-ser
 | [`internal/devices`](internal/devices), [`vehicles`](internal/vehicles), [`counters`](internal/counters), [`keystore`](internal/keystore), [`enroll`](internal/enroll) | Enrolment, vehicles and assignments, the counter guard, escrowed roots, the sealed enrolment blob |
 | [`internal/clients`](internal/clients), [`syncapi`](internal/syncapi), [`audit`](internal/audit), [`httpapi`](internal/httpapi), [`mtls`](internal/mtls) | App identities and invitations, the app and local APIs and the relay, the audit log, the legacy device HTTP API and its TLS |
 | [`internal/decode`](internal/decode), [`store`](internal/store), [`worker`](internal/worker), [`mqtt`](internal/mqtt) | The decoder, PostgreSQL persistence, the outbox worker, the optional MQTT publisher |
-| [`internal/tsdb`](internal/tsdb), [`storeschema`](internal/storeschema), [`engine`](internal/engine), [`insight`](internal/insight), [`power`](internal/power) | The DuckDB store and its contract, engine profiles, the health summary, parked-power analysis |
+| [`internal/tsdb`](internal/tsdb), [`storeschema`](internal/storeschema), [`engine`](internal/engine), [`insight`](internal/insight), [`power`](internal/power), [`wifianchors`](internal/wifianchors) | The DuckDB store and its contract, engine profiles, the health summary, parked-power analysis, the dongle's Wi-Fi anchor table |
 | [`internal/offloadclient`](internal/offloadclient), [`testbundle`](internal/testbundle), [`contracts`](internal/contracts), [`buildinfo`](internal/buildinfo) | The phone-side offload reference, synthetic bundles, contracts lookup, build identity |
 | [`deploy/`](deploy) | `deploy-v3.sh`, `make-certs.sh`, `tsdb-mirror.sh`, `systemd/`, `migrations/` |
 | [`docs/`](docs) | Operator documents (index below) |
