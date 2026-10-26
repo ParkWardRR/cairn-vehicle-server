@@ -76,6 +76,15 @@ func main() {
 				"pin the value in firmware as CAIRN_SERVER_ENROLL_PUBKEY_HEX")
 		printReceiptKey = flag.Bool("print-receipt-key", false,
 			"print the receipt-signing public key and exit (this is the value a device pins)")
+
+		assistNowZTP = flag.String("assistnow-ztp", "",
+			"u-blox AssistNow ZTP credential, JSON {\"endpoint\",\"token\"} (e.g. /etc/cairn/assistnow-ztp.json); "+
+				"a missing file leaves GNSS assistance off")
+		gnssStatus = flag.Bool("gnss-assist-status", false,
+			"print the GNSS assistance registrations and cached data (no secrets) and exit")
+		gnssRegister = flag.String("gnss-assist-register", "",
+			"register a receiver with AssistNow and download its data now, then exit: "+
+				"SEC_UNIQID_HEX,MON_VER_HEX (whole UBX frames); needs -assistnow-ztp")
 	)
 	var app appFlags
 	registerAppFlags(&app)
@@ -104,6 +113,9 @@ func main() {
 		firmwareDir:     *firmwareDir,
 		printReceiptKey: *printReceiptKey,
 		printEnrollKey:  *printEnrollKey,
+		assistNowZTP:    *assistNowZTP,
+		gnssStatus:      *gnssStatus,
+		gnssRegister:    *gnssRegister,
 		log:             log,
 	}); err != nil {
 		log.Error("fatal", "error", err)
@@ -137,6 +149,10 @@ type runConfig struct {
 	printReceiptKey bool
 	printEnrollKey  bool
 
+	assistNowZTP string
+	gnssStatus   bool
+	gnssRegister string
+
 	log *slog.Logger
 }
 
@@ -161,6 +177,13 @@ func resolveReceiptKeyPath(explicit, dataDir string) string {
 }
 
 func run(cfg runConfig) error {
+	// GNSS assistance's administrative modes touch only <data>/gnss-assist, so
+	// they run before anything else is opened (the keystore in particular,
+	// which they have no business needing a master key for).
+	if cfg.gnssStatus || cfg.gnssRegister != "" {
+		return gnssAdmin(cfg)
+	}
+
 	registryPath := filepath.Join(cfg.dataDir, "devices.json")
 
 	registry, err := devices.Open(registryPath)
@@ -298,7 +321,14 @@ func run(cfg runConfig) error {
 	// stuck in a retry loop, not to shape normal syncs.
 	limiter := httpapi.NewLimiter(120, 2)
 
-	api := httpapi.New(httpapi.Config{
+	// GNSS assistance: optional, and never a reason not to start. Ingest must
+	// not depend on u-blox being reachable or on a credential being installed.
+	gnss, err := openGNSSAssist(cfg)
+	if err != nil {
+		cfg.log.Error("GNSS assistance off", "error", err)
+	}
+
+	apiCfg := httpapi.Config{
 		// The device listener is the dongle talking to the server itself, so the ledger
 		// records its bundles as wifi-direct; the phone relay below is ble-relay.
 		Intake:            svc.WithPath(ledger.PathWiFiDirect),
@@ -309,7 +339,11 @@ func run(cfg runConfig) error {
 		Log:               cfg.log,
 		FirmwareDir:       cfg.firmwareDir,
 		RequireClientCert: requireClientCert,
-	})
+	}
+	if gnss != nil {
+		apiCfg.GNSSAssist = gnss
+	}
+	api := httpapi.New(apiCfg)
 
 	srv := &http.Server{
 		Addr:    cfg.addr,
@@ -352,6 +386,9 @@ func run(cfg runConfig) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go housekeep(ctx, svc, limiter, cfg.log)
+	if gnss != nil {
+		go gnss.Run(ctx)
+	}
 
 	// The app API, when enabled, runs beside the device listener on its own
 	// port. It has its own limiter: a phone retrying must never spend a
