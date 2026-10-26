@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"math/rand/v2"
@@ -113,9 +114,14 @@ func main() {
 		json.NewEncoder(w).Encode(map[string]any{"build": buildinfo.Get(), "store": caps})
 	})
 	mux.HandleFunc("POST /query", func(w http.ResponseWriter, r *http.Request) {
-		buf := make([]byte, 64<<10)
-		n, _ := r.Body.Read(buf)
-		res, err := db.Query(r.Context(), string(buf[:n]), 500000)
+		// The whole body, up to the real store's 64 KiB: one Read returns whatever the
+		// first TCP segment held, which cut longer queries off at about 4 KB.
+		body, err := io.ReadAll(io.LimitReader(r.Body, 64<<10))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		res, err := db.Query(r.Context(), string(body), 500000)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
