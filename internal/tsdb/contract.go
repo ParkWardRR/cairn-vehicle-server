@@ -52,6 +52,10 @@ import (
 // verdict that is false for a GNSS fix the accelerometer or physics contradicts. v_trip_leg
 // and v_trip_summary now read it, so a receiver's phantom run no longer makes a leg, a
 // distance or a max speed.
+//
+// Still store/v1.6 since 2026-10-25: v_position_trusted's verdict also refuses a fix with
+// fewer than six satellites or faster than OBD on both sides of it. The view's columns and
+// their meaning ("the evidence does not contradict this fix") are unchanged.
 const StoreContract = "store/v1.6"
 
 // schemaFingerprint is the fingerprint of the schema StoreContract describes.

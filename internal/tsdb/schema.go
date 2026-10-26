@@ -308,6 +308,12 @@ LEFT JOIN warns w  ON w.vehicle_id = d.vehicle_id AND w.boot_id = d.boot_id;
 --     of the pair are untrusted because the data cannot say which one is wrong.
 -- Together they catch all 37 fixes. Elsewhere they drop about a dozen in 13,000: the
 -- two ends of a real receiver jump after a gap, and the legacy fixes above.
+--   * fewer than six satellites in use, and
+--   * a speed more than 4 m/s above the OBD speed on both sides of the fix (within 2 s).
+-- Added 2026-10-25 for the M240i's parking-garage spur: at 3-5 satellites the receiver
+-- ran up to 28 km/h and 70 m north-east while OBD read 3-6 km/h. Measured on every boot
+-- then stored, they drop 1-5% of a drive's fixes (garages, a car park, the first fixes
+-- of a cold start) and a 1970-dated bench session parked at 3-5 satellites.
 --
 -- 'trusted' is the verdict; the position row is otherwise untouched, so nothing is
 -- discarded and a consumer that wants the raw receiver can still read position. Phone
@@ -332,6 +338,19 @@ fixes AS (
     FROM position p
     WINDOW w AS (PARTITION BY p.vehicle_id, p.boot_id, coalesce(p.source_flags, 0) & 32
                  ORDER BY p.mono_ms, p.seq)
+),
+obd_s AS (
+    SELECT vehicle_id, boot_id, CAST(mono_ms AS BIGINT) AS mono_ms, speed_kph
+    FROM obd WHERE speed_kph IS NOT NULL
+),
+judged AS (
+    SELECT f.*, ob.speed_kph AS obd_before_kph, CAST(f.mono_ms AS BIGINT) - ob.mono_ms AS obd_before_age,
+           oa.speed_kph AS obd_after_kph, oa.mono_ms - CAST(f.mono_ms AS BIGINT) AS obd_after_age
+    FROM fixes f
+    ASOF LEFT JOIN obd_s ob ON ob.vehicle_id = f.vehicle_id AND ob.boot_id = f.boot_id
+        AND CAST(f.mono_ms AS BIGINT) >= ob.mono_ms
+    ASOF LEFT JOIN obd_s oa ON oa.vehicle_id = f.vehicle_id AND oa.boot_id = f.boot_id
+        AND CAST(f.mono_ms AS BIGINT) <= oa.mono_ms
 )
 SELECT f.vehicle_id, f.content_root, f.boot_id, f.mono_ms, f.seq, f.observed_at,
        f.lat, f.lon, f.alt_m, f.speed_mps, f.heading_deg, f.fix_type,
@@ -339,12 +358,21 @@ SELECT f.vehicle_id, f.content_root, f.boot_id, f.mono_ms, f.seq, f.observed_at,
        f.source_flags, f.frame_flags,
        NOT coalesce(
            (f.speed_mps >= 8 AND i.rms_quiet < 35)
+           -- Fewer than six satellites: what a receiver reports under a roof or between
+           -- buildings. The 2026-10-25 parking-garage spur (3-5 satellites, 28 km/h on
+           -- the receiver at 3-6 km/h on OBD) and the 2026-10-14 phantom run (median 6
+           -- against 12) both sat here.
+           OR (f.sats_used IS NOT NULL AND f.sats_used < 6)
+           -- Faster than the car's own speedometer on both sides of the fix, within 2 s,
+           -- by more than 4 m/s: the wheels were not doing it.
+           OR (f.obd_before_age <= 2000 AND f.obd_after_age <= 2000
+               AND f.speed_mps > greatest(f.obd_before_kph, f.obd_after_kph) / 3.6 + 4)
            OR (f.prev_ms IS NOT NULL AND f.mono_ms > f.prev_ms AND f.mono_ms - f.prev_ms <= 2000
                AND abs(f.speed_mps - f.prev_speed) * 1000.0 / (f.mono_ms - f.prev_ms) > 10)
            OR (f.next_ms IS NOT NULL AND f.next_ms > f.mono_ms AND f.next_ms - f.mono_ms <= 2000
                AND abs(f.next_speed - f.speed_mps) * 1000.0 / (f.next_ms - f.mono_ms) > 10),
            FALSE) AS trusted
-FROM fixes f
+FROM judged f
 LEFT JOIN imu_near i ON i.vehicle_id = f.vehicle_id AND i.boot_id = f.boot_id
     AND i.s = CAST(f.mono_ms // 1000 AS BIGINT);
 
