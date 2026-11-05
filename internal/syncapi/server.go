@@ -178,6 +178,10 @@ func (s *Server) Routes() http.Handler {
 	}
 
 	mux.HandleFunc("GET /v1/snapshot", s.route("GET /v1/snapshot", authEither, s.handleSnapshot))
+	// The shape of one trip, so the phone can draw a route without carrying
+	// DuckDB to read the Parquet snapshot (front door docs/ios-rewrite-plan.md,
+	// decision D4). Additive in contracts/sync/v1.
+	mux.HandleFunc("GET /v1/trips/{id}/track", s.route("GET /v1/trips/{id}/track", authEither, s.handleTrack))
 
 	mux.HandleFunc("GET /v1/devices", s.route("GET /v1/devices", authAdmin, s.handleListDevices))
 	mux.HandleFunc("POST /v1/devices/{id}/revoke", s.route("POST /v1/devices/{id}/revoke", authAdmin, s.handleRevokeDevice))
